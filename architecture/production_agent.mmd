@@ -1,0 +1,75 @@
+---
+title: "ASRS Early Warning — Layer 5: LangGraph Production Agent"
+---
+flowchart TD
+
+    subgraph pipeline["Layers 1–4: Signal Pipeline (Daily Batch)"]
+        direction LR
+        L1["Layer 1\nSPC + Isolation Forest\n─────────────────\nspc_flag · if_flag\nquadrant · if_score"]
+        L2["Layer 2\nBERTopic\n─────────────────\ntopic_id · topic_label"]
+        L3["Layer 3\nRule-Based Scorer\n─────────────────\nprecursor_score\ncomponent counts"]
+        L4["Layer 4\nChromaDB Index\n─────────────────\n3,000 RED+ORANGE\nall-MiniLM-L6-v2"]
+        L1 --> L2 --> L3 --> L4
+    end
+
+    subgraph state["EarlyWarningState (LangGraph TypedDict)"]
+        direction TB
+        S["signal_flags · incident_ids\nthemes · risk_scores\nenabled_tools · gap_reasoning\nbrief_draft · analyst_override\nchunks  ← operator.add reducer\niteration_count"]
+    end
+
+    subgraph agent["Layer 5: LangGraph Agent"]
+        direction TB
+        SUP["Supervisor\nReads signal_flags\nWrites tool registry\nSets investigation scope"]
+        PLAN["Planner\nDecomposes scope into\nN investigation questions"]
+        SEND["Send API\nFan-out to\nparallel workers"]
+        W1["Worker 1\nRAG query\n+ chunk tagging"]
+        W2["Worker 2\nRAG query\n+ chunk tagging"]
+        WN["Worker N\nRAG query\n+ chunk tagging"]
+        REL["Relevancy Assessment\nTags chunks → questions\nFilters noise"]
+        SUFF{"Sufficiency\nCheck"}
+        GEN["Generator\nDraft safety brief\nfrom working desk\n30-50K tokens"]
+        HITL["Human-in-the-Loop\nAnalyst review\noverride / approve"]
+        OUT["Safety Brief\n─────────────────\nCited · Traceable\nAudit trail\nEscalation flag"]
+    end
+
+    POSTGRES[("Postgres\nCheckpoint Store\nEvery node")]
+
+    %% Pipeline into agent
+    L4 -->|"vector index"| SEND
+    L3 -->|"signal_flags\nrisk_scores"| SUP
+
+    %% Agent flow
+    SUP --> PLAN
+    PLAN --> SEND
+    SEND --> W1 & W2 & WN
+    W1 & W2 & WN -->|"chunks → state\n(operator.add)"| REL
+    REL --> SUFF
+    SUFF -->|"gaps found\ngap_reasoning → state\niteration < max"| SEND
+    SUFF -->|"sufficient\nor max iterations"| GEN
+    GEN --> HITL
+    HITL -->|"approved"| OUT
+    HITL -->|"override\n+ analyst note"| GEN
+
+    %% State connections
+    SUP <-.->|"read/write"| S
+    PLAN <-.->|"read/write"| S
+    SUFF <-.->|"read/write"| S
+    GEN <-.->|"read brief_draft"| S
+
+    %% Checkpoint
+    S <-->|"checkpoint\nevery node"| POSTGRES
+
+    %% Styling
+    classDef layer fill:#003366,color:#fff,stroke:#003366
+    classDef agent fill:#660066,color:#fff,stroke:#660066
+    classDef worker fill:#cc6600,color:#fff,stroke:#cc6600
+    classDef state fill:#006633,color:#fff,stroke:#006633
+    classDef infra fill:#444,color:#fff,stroke:#444
+    classDef output fill:#cc0000,color:#fff,stroke:#cc0000
+
+    class L1,L2,L3,L4 layer
+    class SUP,PLAN,SEND,REL,SUFF,GEN,HITL agent
+    class W1,W2,WN worker
+    class S state
+    class POSTGRES infra
+    class OUT output
