@@ -1,20 +1,27 @@
-"""
-Standalone GNSS emergence demo — one chart, one story.
-Loads Layer 1 parquet and produces gnss_emergence.png.
-Run: uv run python run_gnss_demo.py
-"""
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+"""Generate the GNSS emergence presentation chart."""
+from pathlib import Path
 
-import pandas as pd
 import matplotlib
-matplotlib.use('Agg')
+import pandas as pd
 
-from anomaly import plot_gnss_emergence
+from src.logger import get_logger
+from src.plotter import plot_gnss_emergence
 
-asrs = pd.read_parquet("outputs/data/asrs_layer1.parquet")
-asrs['date'] = pd.to_datetime(asrs['date'], errors='coerce')
-print(f"Loaded {len(asrs):,} records")
+matplotlib.use("Agg")
 
-plot_gnss_emergence(asrs)
+logger = get_logger(__name__)
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+LAYER1_PATH = PROJECT_ROOT / "outputs" / "data" / "asrs_layer1.parquet"
+
+
+def main() -> None:
+    asrs = pd.read_parquet(LAYER1_PATH)
+    asrs["date"] = pd.to_datetime(asrs["date"], errors="coerce")
+
+    logger.info("Loaded %s records from %s", f"{len(asrs):,}", LAYER1_PATH)
+    plot_gnss_emergence(asrs)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,138 +1,181 @@
 """
 Layer 1 runner: load data, explode anomaly field, SPC on top 5 categories,
-Isolation Forest, 2x2 quadrant.
-Run from project root: uv run python run_layer1.py
+Isolation Forest, and build the 2x2 risk quadrant.
+
+Run from project root:
+    uv run python run_layer1.py
 """
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # project root — needed for src.X imports inside modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+from pathlib import Path
 
-import pandas as pd
-import numpy as np
 import matplotlib
-matplotlib.use('Agg')  # non-interactive backend for script mode
 
-from data_loader import load_and_merge_asrs
-from spc import explode_anomaly_field, get_top_anomaly_categories, run_spc_pipeline, plot_spc_results
-from anomaly import build_isolation_forest, build_2x2_quadrant
-
-
-# ── 1. LOAD DATA ─────────────────────────────────────────────────────────────
-print("=" * 60)
-print("STEP 1: Loading ASRS data")
-print("=" * 60)
-asrs = load_and_merge_asrs("data/raw")
-
-print(f"\nDataFrame shape: {asrs.shape}")
-print(f"\nColumn sample (first 30):")
-for c in asrs.columns[:30]:
-    print(f"  {c}")
-
-# Check key columns
-key_cols = ['ACN', 'Time | Date', 'Events | Anomaly', 'Report 1 | Narrative',
-            'Report 2 | Narrative', 'Aircraft 1 | Flight Phase',
-            'Assessments | Primary Problem']
-print("\nKey column availability:")
-for c in key_cols:
-    present = c in asrs.columns
-    if present:
-        null_pct = asrs[c].isna().mean() * 100
-        print(f"  {'OK' if present else 'MISSING'} {c}  - null: {null_pct:.1f}%")
-    else:
-        print(f"  MISSING {c}  - NOT FOUND")
-
-print(f"\nNarrative word count stats:")
-print(asrs['narrative_word_count'].describe().to_string())
-
-# ── 2. EXPLODE ANOMALY FIELD ──────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print("STEP 2: Exploding anomaly field")
-print("=" * 60)
-
-if 'Events | Anomaly' not in asrs.columns:
-    print("ERROR: 'Events | Anomaly' column not found!")
-    print("Available columns matching 'anomaly':")
-    for c in asrs.columns:
-        if 'anomaly' in c.lower() or 'event' in c.lower():
-            print(f"  {c}")
-    sys.exit(1)
-
-asrs = explode_anomaly_field(asrs)
-
-# Top categories
-top_cats = get_top_anomaly_categories(asrs, top_n=15)
-print(f"\nTop 15 anomaly categories by incident count:")
-for cat, cnt in top_cats.items():
-    pct = cnt / len(asrs) * 100
-    print(f"  {cnt:5,} ({pct:5.1f}%)  {cat}")
-
-TOP_5 = top_cats.head(5).index.tolist()
-print(f"\nTop 5 selected for SPC: {TOP_5}")
-
-# ── 3. SPC — CUSUM on top 5 categories ──────────────────────────────────────
-print("\n" + "=" * 60)
-print("STEP 3: Running SPC (CUSUM) pipeline")
-print("=" * 60)
-
-spc_results = {}
-for cat in TOP_5:
-    print(f"\nProcessing: {cat}")
-    result = run_spc_pipeline(asrs, category_value=cat)
-    spc_results[cat] = result
-
-valid_results = {k: v for k, v in spc_results.items() if v is not None}
-print(f"\n{len(valid_results)}/{len(TOP_5)} categories passed SPC minimum requirements")
-for cat, res in valid_results.items():
-    print(f"  {cat}: {len(res['alarms'])} CUSUM alarms")
-    if res['alarms']:
-        alarm_strs = [str(a)[:7] for a in res['alarms'][:5]]
-        print(f"    First alarms: {', '.join(alarm_strs)}")
-
-# Plot SPC
-if valid_results:
-    plot_spc_results(valid_results)
-
-# ── 4. ISOLATION FOREST ───────────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print("STEP 4: Isolation Forest")
-print("=" * 60)
-
-asrs, iso_model = build_isolation_forest(asrs)
-print(f"\nIF score distribution:")
-print(asrs['if_score'].describe().to_string())
-
-# ── 5. 2×2 QUADRANT ──────────────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print("STEP 5: Building 2×2 risk quadrant")
-print("=" * 60)
-
-asrs = build_2x2_quadrant(asrs, spc_results)
-
-# ── 6. SAVE ENRICHED DATASET ─────────────────────────────────────────────────
-out = "outputs/data/asrs_layer1.parquet"
-save_df = asrs.copy()
-for col in save_df.select_dtypes(include=['object']).columns:
-    save_df[col] = save_df[col].astype(str)
-save_df.to_parquet(out, index=False)
-print(f"\nLayer 1 enriched dataset saved to: {out}")
-print(f"Final shape: {asrs.shape}")
-
-# Print GNSS signal preview
-print("\n" + "=" * 60)
-print("GNSS / Navigation anomaly signal (monthly mentions in narratives):")
-print("=" * 60)
-# Narrow to actual spoofing/jamming/GPS-denial events, not generic nav errors
-gnss_mask = asrs['full_narrative'].str.lower().str.contains(
-    r'spoof|jamm|gps.{0,25}interfer|gnss.{0,25}interfer|gps.{0,25}denial|'
-    r'gps.{0,25}unreliable|gps.{0,25}degrad|position.{0,25}spoof|'
-    r'gps.{0,25}lost|navigation.{0,25}warn|gps.{0,25}alert',
-    regex=True, na=False
+from src.anomaly import build_2x2_quadrant, build_isolation_forest
+from src.data_loader import load_and_merge_asrs
+from src.logger import get_logger
+from src.plotter import plot_spc_results
+from src.spc import (
+    explode_anomaly_field,
+    get_top_anomaly_categories,
+    run_spc_pipeline,
 )
-gnss_monthly = (asrs[gnss_mask]
-                .groupby(asrs[gnss_mask]['date'].dt.to_period('M'))['ACN'].count())
-print(f"GNSS-related incidents: {gnss_mask.sum():,} ({gnss_mask.mean()*100:.1f}% of corpus)")
-if not gnss_monthly.empty:
-    print(gnss_monthly.to_string())
 
-print("\nLayer 1 complete.")
+matplotlib.use("Agg")
+
+logger = get_logger(__name__)
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+DATA_DIR = PROJECT_ROOT / "outputs" / "data"
+RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
+LAYER1_PATH = DATA_DIR / "asrs_layer1.parquet"
+
+KEY_COLUMNS = [
+    "ACN",
+    "Time | Date",
+    "Events | Anomaly",
+    "Report 1 | Narrative",
+    "Report 2 | Narrative",
+    "Aircraft 1 | Flight Phase",
+    "Assessments | Primary Problem",
+]
+
+GNSS_SIGNAL_REGEX = (
+    r"spoof|jamm|gps.{0,25}interfer|gnss.{0,25}interfer|gps.{0,25}denial|"
+    r"gps.{0,25}unreliable|gps.{0,25}degrad|position.{0,25}spoof|"
+    r"gps.{0,25}lost|navigation.{0,25}warn|gps.{0,25}alert"
+)
+
+
+def validate_required_columns(asrs) -> None:
+    """Validate columns needed for Layer 1 and log key-column completeness."""
+    logger.info("Key column availability:")
+    for column in KEY_COLUMNS:
+        if column in asrs.columns:
+            null_pct = asrs[column].isna().mean() * 100
+            logger.info("  OK %s - null: %.1f%%", column, null_pct)
+        else:
+            logger.warning("  MISSING %s - NOT FOUND", column)
+
+    if "Events | Anomaly" not in asrs.columns:
+        matching_cols = [
+            column
+            for column in asrs.columns
+            if "anomaly" in column.lower() or "event" in column.lower()
+        ]
+        raise ValueError(
+            "'Events | Anomaly' column not found. "
+            f"Available anomaly/event-like columns: {matching_cols}"
+        )
+
+
+def run_spc_for_top_categories(asrs, top_n: int = 5) -> dict:
+    """Run SPC over the top anomaly categories and return category results."""
+    top_cats = get_top_anomaly_categories(asrs, top_n=15)
+
+    logger.info("Top 15 anomaly categories by incident count:")
+    for category, count in top_cats.items():
+        pct = count / len(asrs) * 100
+        logger.info("  %5s (%.1f%%)  %s", f"{count:,}", pct, category)
+
+    selected_categories = top_cats.head(top_n).index.tolist()
+    logger.info("Top %d selected for SPC: %s", top_n, selected_categories)
+
+    spc_results = {}
+    for category in selected_categories:
+        logger.info("Processing SPC category: %s", category)
+        spc_results[category] = run_spc_pipeline(asrs, category_value=category)
+
+    valid_results = {
+        category: result
+        for category, result in spc_results.items()
+        if result is not None
+    }
+
+    logger.info(
+        "%d/%d categories passed SPC minimum requirements",
+        len(valid_results),
+        len(selected_categories),
+    )
+    for category, result in valid_results.items():
+        logger.info("  %s: %d CUSUM alarms", category, len(result["alarms"]))
+        if result["alarms"]:
+            alarm_strs = [str(alarm)[:7] for alarm in result["alarms"][:5]]
+            logger.info("    First alarms: %s", ", ".join(alarm_strs))
+
+    if valid_results:
+        plot_spc_results(valid_results)
+
+    return spc_results
+
+
+def save_layer1_dataset(asrs) -> None:
+    """Persist Layer 1 enriched dataset to parquet."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    save_df = asrs.copy()
+    for column in save_df.select_dtypes(include=["object"], exclude=["str"]).columns:
+        save_df[column] = save_df[column].astype(str)
+
+    save_df.to_parquet(LAYER1_PATH, index=False)
+    logger.info("Layer 1 enriched dataset saved to: %s", LAYER1_PATH)
+    logger.info("Final shape: %s", asrs.shape)
+
+
+def log_gnss_signal_preview(asrs) -> None:
+    """Log the GNSS narrative signal used as a Layer 1 storyline preview."""
+    gnss_mask = asrs["full_narrative"].str.lower().str.contains(
+        GNSS_SIGNAL_REGEX,
+        regex=True,
+        na=False,
+    )
+    gnss_monthly = (
+        asrs[gnss_mask]
+        .groupby(asrs[gnss_mask]["date"].dt.to_period("M"))["ACN"]
+        .count()
+    )
+
+    logger.info(
+        "GNSS-related incidents: %s (%.1f%% of corpus)",
+        f"{gnss_mask.sum():,}",
+        gnss_mask.mean() * 100,
+    )
+    if not gnss_monthly.empty:
+        logger.info("GNSS monthly counts:\n%s", gnss_monthly.to_string())
+
+
+def main() -> None:
+    logger.info("STEP 1: Loading ASRS data")
+    asrs = load_and_merge_asrs(RAW_DATA_DIR)
+
+    logger.info("DataFrame shape: %s", asrs.shape)
+    logger.info("Column sample (first 30): %s", list(asrs.columns[:30]))
+    logger.info(
+        "Narrative word count stats:\n%s",
+        asrs["narrative_word_count"].describe().to_string(),
+    )
+
+    validate_required_columns(asrs)
+
+    logger.info("STEP 2: Exploding anomaly field")
+    asrs = explode_anomaly_field(asrs)
+
+    logger.info("STEP 3: Running SPC pipeline")
+    spc_results = run_spc_for_top_categories(asrs)
+
+    logger.info("STEP 4: Training Isolation Forest")
+    asrs, _iso_model = build_isolation_forest(asrs)
+    logger.info("IF score distribution:\n%s", asrs["if_score"].describe().to_string())
+
+    logger.info("STEP 5: Building 2x2 risk quadrant")
+    asrs = build_2x2_quadrant(asrs, spc_results)
+
+    logger.info("STEP 6: Saving Layer 1 dataset")
+    save_layer1_dataset(asrs)
+
+    logger.info("GNSS / navigation narrative signal preview")
+    log_gnss_signal_preview(asrs)
+
+    logger.info("Layer 1 complete.")
+
+
+if __name__ == "__main__":
+    main()

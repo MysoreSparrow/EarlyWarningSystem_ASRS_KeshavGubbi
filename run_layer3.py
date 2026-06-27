@@ -2,96 +2,118 @@
 Layer 3 runner: rule-based precursor risk scorer.
 
 Applies transparent, auditable risk scoring to all incidents.
-No ML — every score component maps to a known human factors category.
 
-Outputs:
-  outputs/figures/precursor_risk_distribution.png
-  outputs/data/layer3_high_risk_incidents.csv
-  outputs/data/asrs_layer3.parquet
-
-Run: uv run python run_layer3.py
+Run:
+    uv run python run_layer3.py
 """
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # project root — needed for src.X imports inside modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+from pathlib import Path
 
 import pandas as pd
-from risk_scorer import apply_risk_scorer, plot_risk_distribution, export_high_risk_incidents
 
-# ── 1. LOAD ───────────────────────────────────────────────────────────────────
-print("=" * 60)
-print("STEP 1: Loading enriched dataset")
-print("=" * 60)
-src = "outputs/data/asrs_layer2.parquet"
-if not os.path.exists(src):
-    src = "outputs/data/asrs_layer1.parquet"
-    print(f"Layer 2 not found, falling back to {src}")
-asrs = pd.read_parquet(src)
-asrs['date'] = pd.to_datetime(asrs['date'], errors='coerce')
-print(f"Loaded {len(asrs):,} records  |  columns: {asrs.shape[1]}")
-print(f"Quadrant breakdown:")
-print(asrs['quadrant'].value_counts().to_string())
-
-# ── 2. SCORE ──────────────────────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print("STEP 2: Applying rule-based risk scorer")
-print("=" * 60)
-asrs = apply_risk_scorer(asrs)
-
-# Summary stats
-print(f"\nPrecursor score distribution:")
-print(asrs['precursor_score'].describe().to_string())
-
-# Cross-tab: high risk by quadrant
-print(f"\nHigh-risk incidents by quadrant:")
-print(
-    asrs.groupby('quadrant')['high_precursor_risk']
-    .agg(['sum', 'count', 'mean'])
-    .rename(columns={'sum': 'high_risk_count', 'count': 'total', 'mean': 'rate'})
-    .assign(rate=lambda df: df['rate'].map('{:.1%}'.format))
-    .to_string()
+from src.logger import get_logger
+from src.plotter import plot_risk_distribution
+from src.risk_scorer import (
+    apply_risk_scorer,
+    export_high_risk_incidents,
 )
 
-# Top 5 incidents overall
-print(f"\nTop 5 highest-risk incidents (all quadrants):")
-component_cols = [c for c in asrs.columns if c.startswith('component_')]
-show_cols = ['ACN', 'date', 'quadrant', 'precursor_score'] + component_cols + ['Events | Anomaly']
-show_cols = [c for c in show_cols if c in asrs.columns]
-print(asrs.nlargest(5, 'precursor_score')[show_cols].to_string())
+logger = get_logger(__name__)
 
-# ── 3. CHART ─────────────────────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print("STEP 3: Generating risk score distribution chart")
-print("=" * 60)
-plot_risk_distribution(asrs)
+PROJECT_ROOT = Path(__file__).resolve().parent
+DATA_DIR = PROJECT_ROOT / "outputs" / "data"
 
-# ── 4. EXPORT HIGH-RISK CSV ───────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print("STEP 4: Exporting top 100 high-risk incidents")
-print("=" * 60)
-top100 = export_high_risk_incidents(asrs)
-print(f"\nTop 10 from export:")
-preview_cols = ['ACN', 'date', 'quadrant', 'precursor_score'] + component_cols[:3]
-preview_cols = [c for c in preview_cols if c in top100.columns]
-print(top100.head(10)[preview_cols].to_string())
+LAYER2_PATH = DATA_DIR / "asrs_layer2.parquet"
+LAYER1_PATH = DATA_DIR / "asrs_layer1.parquet"
+LAYER3_PATH = DATA_DIR / "asrs_layer3.parquet"
 
-# ── 5. SAVE PARQUET ───────────────────────────────────────────────────────────
-print("\n" + "=" * 60)
-print("STEP 5: Saving Layer 3 parquet")
-print("=" * 60)
-out = "outputs/data/asrs_layer3.parquet"
-save = asrs.copy()
-for col in save.select_dtypes(include=['object']).columns:
-    save[col] = save[col].astype(str)
-save.to_parquet(out, index=False)
-print(f"Saved: {out}  |  shape: {asrs.shape}")
 
-print(f"\n{'='*60}")
-print(f"LAYER 3 COMPLETE")
-print(f"  Incidents scored : {len(asrs):,}")
-print(f"  High-risk (top 10%): {asrs['high_precursor_risk'].sum():,}")
-print(f"  Chart : outputs/figures/precursor_risk_distribution.png")
-print(f"  CSV   : outputs/data/layer3_high_risk_incidents.csv")
-print(f"  Data  : {out}")
-print(f"{'='*60}")
+def _load_input_dataset() -> pd.DataFrame:
+    """Load Layer 2 data if present; otherwise fall back to Layer 1."""
+    if LAYER2_PATH.exists():
+        source_path = LAYER2_PATH
+    else:
+        source_path = LAYER1_PATH
+        logger.warning("Layer 2 not found, falling back to %s", source_path)
+
+    asrs = pd.read_parquet(source_path)
+    asrs["date"] = pd.to_datetime(asrs["date"], errors="coerce")
+
+    logger.info("Loaded %s records from %s", f"{len(asrs):,}", source_path)
+    logger.info("Columns: %d", asrs.shape[1])
+    logger.info("Quadrant breakdown:\n%s", asrs["quadrant"].value_counts().to_string())
+    return asrs
+
+
+def _save_layer3_dataset(asrs: pd.DataFrame) -> None:
+    """Persist Layer 3 enriched dataset."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    save_df = asrs.copy()
+    for column in save_df.select_dtypes(include=["object"], exclude=["str"]).columns:
+        save_df[column] = save_df[column].astype(str)
+
+    save_df.to_parquet(LAYER3_PATH, index=False)
+    logger.info("Saved: %s | shape: %s", LAYER3_PATH, asrs.shape)
+
+
+def main() -> None:
+    logger.info("STEP 1: Loading enriched dataset")
+    asrs = _load_input_dataset()
+
+    logger.info("STEP 2: Applying rule-based risk scorer")
+    asrs = apply_risk_scorer(asrs)
+
+    logger.info(
+        "Precursor score distribution:\n%s",
+        asrs["precursor_score"].describe().to_string(),
+    )
+
+    high_risk_by_quadrant = (
+        asrs.groupby("quadrant")["high_precursor_risk"]
+        .agg(["sum", "count", "mean"])
+        .rename(columns={"sum": "high_risk_count", "count": "total", "mean": "rate"})
+        .assign(rate=lambda frame: frame["rate"].map("{:.1%}".format))
+    )
+    logger.info("High-risk incidents by quadrant:\n%s", high_risk_by_quadrant.to_string())
+
+    component_cols = [column for column in asrs.columns if column.startswith("component_")]
+    show_cols = [
+        "ACN",
+        "date",
+        "quadrant",
+        "precursor_score",
+        *component_cols,
+        "Events | Anomaly",
+    ]
+    show_cols = [column for column in show_cols if column in asrs.columns]
+    logger.info(
+        "Top 5 highest-risk incidents:\n%s",
+        asrs.nlargest(5, "precursor_score")[show_cols].to_string(index=False),
+    )
+
+    logger.info("STEP 3: Generating risk score distribution chart")
+    plot_risk_distribution(asrs)
+
+    logger.info("STEP 4: Exporting top 100 high-risk incidents")
+    top100 = export_high_risk_incidents(asrs)
+
+    preview_cols = [
+        "ACN",
+        "date",
+        "quadrant",
+        "precursor_score",
+        *component_cols[:3],
+    ]
+    preview_cols = [column for column in preview_cols if column in top100.columns]
+    logger.info("Top 10 from export:\n%s", top100.head(10)[preview_cols].to_string(index=False))
+
+    logger.info("STEP 5: Saving Layer 3 parquet")
+    _save_layer3_dataset(asrs)
+
+    logger.info("Layer 3 complete.")
+    logger.info("Incidents scored: %s", f"{len(asrs):,}")
+    logger.info("High-risk incidents: %s", f"{asrs['high_precursor_risk'].sum():,}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,37 +1,61 @@
+from pathlib import Path
+
 import pandas as pd
-import numpy as np
-import os
+
 from src.logger import get_logger
 
 logger = get_logger(__name__)
 
+ASRS_FILE_SUFFIXES = {".xls", ".xlsx"}
+DEFAULT_MERGED_OUTPUT_PATH = Path("outputs/data/asrs_merged.parquet")
 
-def load_asrs_file(filepath: str) -> pd.DataFrame:
-    """
-    Load one ASRS XLS export (actually TSV with two header rows).
-    """
+
+def load_asrs_file(filepath: str | Path) -> pd.DataFrame:
+    """Load one ASRS XLS export, which is actually TSV with two header rows."""
+    filepath = Path(filepath)
+
     df = pd.read_csv(
         filepath,
-        sep='\t',
-        encoding='utf-8',
+        sep="\t",
+        encoding="utf-8",
         low_memory=False,
         header=[0, 1],
-        on_bad_lines='skip'
+        on_bad_lines="skip",
     )
-    # Flatten two-level column names — "Group | Field" format
+
     df.columns = [
-        f"{str(a).strip()} | {str(b).strip()}"
-        if str(a).strip() and not str(a).startswith('Unnamed')
-        else str(b).strip()
-        for a, b in df.columns
+        f"{str(group).strip()} | {str(field).strip()}"
+        if str(group).strip() and not str(group).startswith("Unnamed")
+        else str(field).strip()
+        for group, field in df.columns
     ]
     return df
 
 
-def load_and_merge_asrs(data_dir: str = "data/raw") -> pd.DataFrame:
-    """Load all ASRS batch files and merge into one clean DataFrame."""
-    files = [f for f in os.listdir(data_dir)
-             if f.endswith('.xls') or f.endswith('.xlsx')]
+def load_and_merge_asrs(
+    data_dir: str | Path = "data/raw",
+    save_path: str | Path | None = DEFAULT_MERGED_OUTPUT_PATH,
+) -> pd.DataFrame:
+    """
+    Load all ASRS batch files and merge into one clean DataFrame.
+
+    Parameters
+    ----------
+    data_dir:
+        Directory containing ASRS `.xls`/`.xlsx` batch exports. These files are
+        TSV text exports despite the Excel-like extension.
+    save_path:
+        Optional parquet output path. Pass None to skip writing the merged file.
+    """
+    data_dir = Path(data_dir)
+
+    if not data_dir.exists():
+        raise FileNotFoundError(f"ASRS data directory not found: {data_dir}")
+
+    files = sorted(
+        path for path in data_dir.iterdir()
+        if path.suffix.lower() in ASRS_FILE_SUFFIXES
+    )
 
     if not files:
         raise FileNotFoundError(
@@ -39,68 +63,76 @@ def load_and_merge_asrs(data_dir: str = "data/raw") -> pd.DataFrame:
             "Download from https://asrs.arc.nasa.gov/search/database.html"
         )
 
-    dfs = []
-    for fname in sorted(files):
-        path = os.path.join(data_dir, fname)
+    frames = []
+    for path in files:
         df = load_asrs_file(path)
-        logger.info("Loaded %s: %s records, %d columns", fname, f"{len(df):,}", len(df.columns))
-        dfs.append(df)
+        logger.info(
+            "Loaded %s: %s records, %d columns",
+            path.name,
+            f"{len(df):,}",
+            len(df.columns),
+        )
+        frames.append(df)
 
-    asrs = pd.concat(dfs, ignore_index=True)
+    asrs = pd.concat(frames, ignore_index=True)
 
-    # Parse date (format: YYYYMM as integer e.g. 202301)
-    date_col = 'Time | Date'
+    date_col = "Time | Date"
     if date_col in asrs.columns:
-        asrs['date'] = pd.to_datetime(
+        asrs["date"] = pd.to_datetime(
             asrs[date_col].astype(str).str[:6],
-            format='%Y%m',
-            errors='coerce'
+            format="%Y%m",
+            errors="coerce",
         )
     else:
-        # Fallback: look for any column with 'Date' in name
-        date_candidates = [c for c in asrs.columns if 'date' in c.lower()]
-        if date_candidates:
-            logger.warning("'%s' not found, using '%s'", date_col, date_candidates[0])
-            asrs['date'] = pd.to_datetime(
-                asrs[date_candidates[0]].astype(str).str[:6],
-                format='%Y%m',
-                errors='coerce'
+        date_candidates = [column for column in asrs.columns if "date" in column.lower()]
+        if not date_candidates:
+            raise ValueError(
+                f"'{date_col}' not found and no fallback date columns detected."
             )
 
-    # Combine both reporter narratives
-    narr1 = 'Report 1 | Narrative'
-    narr2 = 'Report 2 | Narrative'
-    asrs['full_narrative'] = (
-        asrs.get(narr1, pd.Series([''] * len(asrs))).fillna('') + ' ' +
-        asrs.get(narr2, pd.Series([''] * len(asrs))).fillna('')
+        fallback_col = date_candidates[0]
+        logger.warning("'%s' not found, using '%s'", date_col, fallback_col)
+        asrs["date"] = pd.to_datetime(
+            asrs[fallback_col].astype(str).str[:6],
+            format="%Y%m",
+            errors="coerce",
+        )
+
+    narrative_1_col = "Report 1 | Narrative"
+    narrative_2_col = "Report 2 | Narrative"
+    empty_text = pd.Series("", index=asrs.index)
+
+    asrs["full_narrative"] = (
+        asrs.get(narrative_1_col, empty_text).fillna("").astype(str)
+        + " "
+        + asrs.get(narrative_2_col, empty_text).fillna("").astype(str)
     ).str.strip()
 
-    asrs['narrative_word_count'] = asrs['full_narrative'].str.split().str.len()
+    asrs["narrative_word_count"] = asrs["full_narrative"].str.split().str.len()
 
-    # Sort by date
-    if 'date' in asrs.columns:
-        asrs = asrs.sort_values('date').reset_index(drop=True)
+    asrs = asrs.sort_values("date").reset_index(drop=True)
 
     logger.info("Merged: %s total records", f"{len(asrs):,}")
-    if 'date' in asrs.columns:
-        logger.info("Date range: %s to %s", asrs['date'].min(), asrs['date'].max())
-        year_counts = asrs['date'].dt.year.value_counts().sort_index()
-        logger.info("Records per year:\n%s", year_counts.to_string())
+    logger.info("Date range: %s to %s", asrs["date"].min(), asrs["date"].max())
+
+    year_counts = asrs["date"].dt.year.value_counts().sort_index()
+    logger.info("Records per year:\n%s", year_counts.to_string())
 
     logger.info(
-        "Narrative word count — median: %.0f, pct>100: %.1f%%",
-        asrs['narrative_word_count'].median(),
-        (asrs['narrative_word_count'] > 100).mean() * 100,
+        "Narrative word count - median: %.0f, pct>100: %.1f%%",
+        asrs["narrative_word_count"].median(),
+        (asrs["narrative_word_count"] > 100).mean() * 100,
     )
 
-    # Save as parquet for fast reloading
-    # Cast all object columns to str to prevent pyarrow mixed-type inference errors
-    out_path = "outputs/data/asrs_merged.parquet"
-    os.makedirs("outputs/data", exist_ok=True)
-    save_df = asrs.copy()
-    for col in save_df.select_dtypes(include=['object']).columns:
-        save_df[col] = save_df[col].astype(str)
-    save_df.to_parquet(out_path, index=False)
-    logger.info("Saved merged parquet to %s", out_path)
+    if save_path is not None:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+
+        save_df = asrs.copy()
+        for column in save_df.select_dtypes(include=["object"], exclude=["str"]).columns:
+            save_df[column] = save_df[column].astype(str)
+
+        save_df.to_parquet(save_path, index=False)
+        logger.info("Saved merged parquet to %s", save_path)
 
     return asrs

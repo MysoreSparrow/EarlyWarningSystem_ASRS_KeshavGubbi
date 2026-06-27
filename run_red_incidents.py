@@ -1,41 +1,92 @@
-"""Pull top 20 RED quadrant incidents by IF score and print top 5 narratives."""
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+"""Export top RED quadrant incidents and log the top narratives."""
+from pathlib import Path
+
 import pandas as pd
 
-asrs = pd.read_parquet("outputs/data/asrs_layer1.parquet")
-asrs['date'] = pd.to_datetime(asrs['date'], errors='coerce')
+from src.logger import get_logger
 
-red_top = (asrs[asrs['quadrant'] == 'RED']
-           .nlargest(20, 'if_score')
-           [['ACN', 'date', 'Events | Anomaly', 'Aircraft 1 | Make Model Name',
-             'Aircraft 1 | Flight Phase', 'Assessments | Primary Problem',
-             'if_score', 'spc_flag', 'full_narrative']]
-           .copy())
+logger = get_logger(__name__)
 
-print(f"Total RED incidents: {(asrs['quadrant'] == 'RED').sum():,}")
-print(f"\nTop 20 by IF score:")
-print(red_top[['ACN', 'date', 'if_score', 'Events | Anomaly',
-               'Aircraft 1 | Make Model Name', 'Aircraft 1 | Flight Phase']].to_string())
+PROJECT_ROOT = Path(__file__).resolve().parent
+LAYER1_PATH = PROJECT_ROOT / "outputs" / "data" / "asrs_layer1.parquet"
+OUT_PATH = PROJECT_ROOT / "outputs" / "data" / "red_top20_incidents.csv"
 
-print("\n" + "=" * 70)
-print("TOP 5 NARRATIVES (highest novelty + SPC alarm):")
-print("=" * 70)
-for i, (_, row) in enumerate(red_top.head(5).iterrows(), 1):
-    date_str = row['date'].date() if pd.notna(row['date']) else 'unknown'
-    print(f"\n[{i}] ACN: {row['ACN']}  |  {date_str}  |  IF score: {row['if_score']:.4f}")
-    print(f"    Aircraft: {row['Aircraft 1 | Make Model Name']}")
-    print(f"    Phase:    {row['Aircraft 1 | Flight Phase']}")
-    print(f"    Anomaly:  {str(row['Events | Anomaly'])[:120]}")
-    print(f"    Problem:  {row['Assessments | Primary Problem']}")
-    print(f"    Narrative:")
-    narrative = str(row['full_narrative'])
-    # Print in 100-char lines for readability
-    for j in range(0, min(600, len(narrative)), 100):
-        print(f"      {narrative[j:j+100]}")
-    print("-" * 70)
+RED_EXPORT_COLUMNS = [
+    "ACN",
+    "date",
+    "Events | Anomaly",
+    "Aircraft 1 | Make Model Name",
+    "Aircraft 1 | Flight Phase",
+    "Assessments | Primary Problem",
+    "if_score",
+    "spc_flag",
+    "full_narrative",
+]
 
-# Save to CSV for reference
-red_top.drop(columns=['full_narrative']).to_csv(
-    'outputs/data/red_top20_incidents.csv', index=False)
-print("\nSaved: outputs/data/red_top20_incidents.csv")
+
+def _format_narrative_preview(narrative: str, line_width: int = 100, max_chars: int = 600) -> str:
+    """Format a narrative into fixed-width preview lines."""
+    narrative = narrative[:max_chars]
+    return "\n".join(
+        f"      {narrative[index:index + line_width]}"
+        for index in range(0, len(narrative), line_width)
+    )
+
+
+def main() -> None:
+    asrs = pd.read_parquet(LAYER1_PATH)
+    asrs["date"] = pd.to_datetime(asrs["date"], errors="coerce")
+
+    missing = [column for column in RED_EXPORT_COLUMNS if column not in asrs.columns]
+    if missing:
+        raise ValueError(f"Missing required columns for RED export: {missing}")
+
+    red = asrs[asrs["quadrant"] == "RED"].copy()
+    red_top = (
+        red.nlargest(20, "if_score")[RED_EXPORT_COLUMNS]
+        .copy()
+    )
+
+    logger.info("Total RED incidents: %s", f"{len(red):,}")
+    logger.info(
+        "Top 20 RED incidents by IF score:\n%s",
+        red_top[
+            [
+                "ACN",
+                "date",
+                "if_score",
+                "Events | Anomaly",
+                "Aircraft 1 | Make Model Name",
+                "Aircraft 1 | Flight Phase",
+            ]
+        ].to_string(index=False),
+    )
+
+    logger.info("Top 5 RED narratives:")
+    for index, (_, row) in enumerate(red_top.head(5).iterrows(), 1):
+        date_str = row["date"].date() if pd.notna(row["date"]) else "unknown"
+        logger.info(
+            "\n[%d] ACN: %s | %s | IF score: %.4f\n"
+            "    Aircraft: %s\n"
+            "    Phase:    %s\n"
+            "    Anomaly:  %s\n"
+            "    Problem:  %s\n"
+            "    Narrative:\n%s",
+            index,
+            row["ACN"],
+            date_str,
+            row["if_score"],
+            row["Aircraft 1 | Make Model Name"],
+            row["Aircraft 1 | Flight Phase"],
+            str(row["Events | Anomaly"])[:120],
+            row["Assessments | Primary Problem"],
+            _format_narrative_preview(str(row["full_narrative"])),
+        )
+
+    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    red_top.drop(columns=["full_narrative"]).to_csv(OUT_PATH, index=False)
+    logger.info("Saved: %s", OUT_PATH)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,111 +1,134 @@
 """
 Layer 4 runner: ChromaDB RAG demo.
 
-Loads Layer 3 enriched dataset, indexes RED+ORANGE incidents,
-runs all four DEMO_QUERIES with live Claude API.
+Loads Layer 3 enriched dataset, indexes RED+ORANGE incidents, and runs all demo
+queries when ANTHROPIC_API_KEY is available.
 
-Run: uv run python run_layer4.py
-Requires: ANTHROPIC_API_KEY in .env
+Run:
+    uv run python run_layer4.py
 """
-import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # project root — needed for src.X imports inside modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-
-# Claude API responses contain Unicode (em dashes, smart quotes).
-# Windows cp1252 console can't encode them — reconfigure stdout to UTF-8.
-if hasattr(sys.stdout, 'reconfigure'):
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-
+import sys
 import time
+from pathlib import Path
+
 import pandas as pd
-from rag import build_rag_index, rag_query, run_all_demos, DEMO_QUERIES
 
-# ── 1. LOAD ───────────────────────────────────────────────────────────────────
-print("=" * 65)
-print("STEP 1: Loading Layer 3 enriched dataset")
-print("=" * 65)
-src = "outputs/data/asrs_layer3.parquet"
-if not os.path.exists(src):
-    src = "outputs/data/asrs_layer2.parquet"
-    print(f"Layer 3 not found, falling back to {src}")
+from src.logger import get_logger
+from src.rag import DEMO_QUERIES, build_rag_index, run_all_demos
 
-asrs = pd.read_parquet(src)
-asrs['date'] = pd.to_datetime(asrs['date'], errors='coerce')
-print(f"Loaded {len(asrs):,} records  |  columns: {asrs.shape[1]}")
-print(f"Quadrant breakdown:")
-print(asrs['quadrant'].value_counts().to_string())
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-flagged_count = (asrs['quadrant'].isin(['RED', 'ORANGE'])).sum()
-print(f"\nRED + ORANGE incidents: {flagged_count:,}")
-if 'precursor_score' in asrs.columns:
-    top_pct = asrs[asrs['quadrant'].isin(['RED','ORANGE'])]['precursor_score'].quantile(0.9)
-    print(f"90th-pct precursor score in flagged set: {top_pct:.3f}")
+logger = get_logger(__name__)
 
-# ── 2. BUILD INDEX ────────────────────────────────────────────────────────────
-print("\n" + "=" * 65)
-print("STEP 2: Building ChromaDB index")
-print("=" * 65)
-print("Indexing up to 3,000 RED+ORANGE incidents, "
-      "prioritised by precursor_score descending")
+PROJECT_ROOT = Path(__file__).resolve().parent
+DATA_DIR = PROJECT_ROOT / "outputs" / "data"
+CHROMA_DIR = DATA_DIR / "chromadb"
 
-t_start = time.time()
-collection, client, embedding_model = build_rag_index(
-    asrs, max_incidents=3000,
-    persist_dir="outputs/data/chromadb",
-    force_rebuild=False,  # set True to re-embed from scratch
-)
-t_total = time.time() - t_start
+LAYER3_PATH = DATA_DIR / "asrs_layer3.parquet"
+LAYER2_PATH = DATA_DIR / "asrs_layer2.parquet"
 
-print(f"\nIndex stats:")
-print(f"  Total indexed : {collection.count():,}")
-print(f"  Wall time     : {t_total:.1f}s")
 
-# ── 3. SPOT-CHECK QUERY (verify index works before API calls) ─────────────────
-print("\n" + "=" * 65)
-print("STEP 3: Spot-check — semantic search only (no Claude API)")
-print("=" * 65)
-test_q = "GPS spoofing radar ghost targets"
-test_emb = embedding_model.encode([test_q]).tolist()
-test_res = collection.query(
-    query_embeddings=test_emb, n_results=3,
-    include=['documents', 'metadatas', 'distances'],
-)
-print(f"Query: '{test_q}'")
-for i, (doc, meta, dist) in enumerate(zip(
-    test_res['documents'][0],
-    test_res['metadatas'][0],
-    test_res['distances'][0],
-), 1):
-    # With cosine distance space: dist=0 is identical, dist=1 is orthogonal
-    cosine_sim = 1 - dist
-    print(f"  [{i}] ACN:{meta['acn']} | {meta['date']} | "
-          f"Cosine sim:{cosine_sim:.3f} | Risk:{meta['precursor_score']:.2f}")
-    print(f"       {doc[:150].replace(chr(10), ' ')}")
+def _load_input_dataset() -> pd.DataFrame:
+    if LAYER3_PATH.exists():
+        source_path = LAYER3_PATH
+    else:
+        source_path = LAYER2_PATH
+        logger.warning("Layer 3 not found, falling back to %s", source_path)
 
-# ── 4. ALL FOUR DEMO QUERIES ──────────────────────────────────────────────────
-print("\n" + "=" * 65)
-print("STEP 4: Running all four DEMO_QUERIES with Claude API")
-print("=" * 65)
-api_key = os.getenv("ANTHROPIC_API_KEY")
-if not api_key or api_key.strip() == "your-api-key-here":
-    print("ANTHROPIC_API_KEY not set in .env")
-    print("Add your key to .env and re-run step 4 only:")
-    print("  from src.rag import rag_query, run_all_demos")
-    print("  run_all_demos(collection, embedding_model)")
-    print("\nIndex is persisted — no re-embedding needed on next run.")
-else:
-    print(f"API key: SET  |  Model: claude-sonnet-4-6")
-    run_all_demos(collection, embedding_model)
+    asrs = pd.read_parquet(source_path)
+    asrs["date"] = pd.to_datetime(asrs["date"], errors="coerce")
 
-# ── 5. SUMMARY ────────────────────────────────────────────────────────────────
-print(f"\n{'='*65}")
-print(f"LAYER 4 COMPLETE")
-print(f"  Incidents indexed : {collection.count():,}")
-print(f"  Embedding time    : {t_total:.1f}s")
-print(f"  Demo queries run  : {len(DEMO_QUERIES)}")
-print(f"  collection and embedding_model objects are live.")
-print(f"  To run additional queries interactively:")
-print(f"    from src.rag import rag_query")
-print(f"    rag_query('your question', collection, embedding_model)")
-print(f"{'='*65}")
+    logger.info("Loaded %s records from %s", f"{len(asrs):,}", source_path)
+    logger.info("Columns: %d", asrs.shape[1])
+    logger.info("Quadrant breakdown:\n%s", asrs["quadrant"].value_counts().to_string())
+
+    flagged_count = asrs["quadrant"].isin(["RED", "ORANGE"]).sum()
+    logger.info("RED + ORANGE incidents: %s", f"{flagged_count:,}")
+
+    if "precursor_score" in asrs.columns:
+        top_pct = (
+            asrs.loc[asrs["quadrant"].isin(["RED", "ORANGE"]), "precursor_score"]
+            .quantile(0.9)
+        )
+        logger.info("90th-pct precursor score in flagged set: %.3f", top_pct)
+
+    return asrs
+
+
+def _spot_check_search(collection, embedding_model) -> None:
+    query = "GPS spoofing radar ghost targets"
+    query_embedding = embedding_model.encode([query]).tolist()
+    results = collection.query(
+        query_embeddings=query_embedding,
+        n_results=3,
+        include=["documents", "metadatas", "distances"],
+    )
+
+    rows = []
+    for index, (doc, meta, distance) in enumerate(
+        zip(
+            results["documents"][0],
+            results["metadatas"][0],
+            results["distances"][0],
+        ),
+        1,
+    ):
+        cosine_similarity = 1 - distance
+        rows.append(
+            {
+                "rank": index,
+                "acn": meta["acn"],
+                "date": meta["date"],
+                "cosine_similarity": round(cosine_similarity, 3),
+                "risk": meta["precursor_score"],
+                "preview": doc[:150].replace("\n", " "),
+            }
+        )
+
+    logger.info("Spot-check query: %s", query)
+    logger.info("Spot-check results:\n%s", pd.DataFrame(rows).to_string(index=False))
+
+
+def main() -> None:
+    logger.info("STEP 1: Loading Layer 3 enriched dataset")
+    asrs = _load_input_dataset()
+
+    logger.info("STEP 2: Building/loading ChromaDB index")
+    logger.info(
+        "Indexing up to 3,000 RED+ORANGE incidents, prioritized by precursor_score"
+    )
+
+    start_time = time.time()
+    collection, _client, embedding_model = build_rag_index(
+        asrs,
+        max_incidents=3000,
+        persist_dir=str(CHROMA_DIR),
+        force_rebuild=False,
+    )
+    elapsed = time.time() - start_time
+
+    logger.info("Index stats:")
+    logger.info("  Total indexed: %s", f"{collection.count():,}")
+    logger.info("  Wall time: %.1fs", elapsed)
+
+    logger.info("STEP 3: Spot-check semantic search")
+    _spot_check_search(collection, embedding_model)
+
+    logger.info("STEP 4: Running demo queries with Claude API if available")
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key or api_key.strip() == "your-api-key-here":
+        logger.warning("ANTHROPIC_API_KEY not set in .env")
+        logger.info("Index is persisted; no re-embedding needed on next run.")
+    else:
+        logger.info("API key: SET | Demo queries: %d", len(DEMO_QUERIES))
+        run_all_demos(collection, embedding_model)
+
+    logger.info("Layer 4 complete.")
+    logger.info("Incidents indexed: %s", f"{collection.count():,}")
+    logger.info("Embedding/index load time: %.1fs", elapsed)
+
+
+if __name__ == "__main__":
+    main()

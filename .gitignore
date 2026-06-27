@@ -21,3 +21,19 @@ outputs/logs/
 outputs/data/chromadb/
 outputs/data/bertopic_model/
 notebooks/outputs/
+
+# Final submission exclusions
+notebooks/
+outputs/data/checkpoints/
+outputs/data/*.csv
+outputs/data/*.parquet
+outputs/data/*.stale.parquet
+outputs/data/chromadb/
+outputs/data/bertopic_model/
+outputs/logs/
+logs/
+*.log
+*.before-*.md
+*.stale.*
+.DS_Store
+Thumbs.db

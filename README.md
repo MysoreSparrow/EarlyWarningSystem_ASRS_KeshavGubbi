@@ -2,441 +2,761 @@
 
 <!-- markdownlint-disable MD024 -->
 
-A five-layer early warning system for emerging aviation safety risks,
-built on NASA ASRS incident report data (2018–2026, 43,829 incidents).
-Built as a case study for the IATA Data Science interview (June 2026).
+A five-layer early warning system for emerging aviation safety risks, built on
+NASA Aviation Safety Reporting System (ASRS) incident report data.
+
+Built as a case study for the IATA Data Science interview, June 2026.
 
 ---
 
-## Key findings
+## Executive Summary
 
-| Finding | Detail |
+This project demonstrates how aviation safety incident reports can be transformed
+into an interpretable early warning system.
+
+The system combines:
+
+1. Layer 1: SPC + Isolation Forest for anomaly detection
+2. Layer 2: BERTopic for semantic pattern discovery
+3. Layer 3: rule-based precursor risk scoring
+4. Layer 4: cited RAG analyst assistant
+5. Layer 5: production LangGraph agent architecture
+
+The design deliberately favors interpretability, auditability, and defensibility
+over opaque model complexity. Every score, alert, and retrieval result can be
+traced back to an incident, an anomaly category, a text pattern, or an ACN number.
+
+---
+
+## Key Findings
+
+| Finding | Result |
 | --- | --- |
-| **GNSS spoofing emergence** | CUSUM fired first alarm **April 2024** on spoofing/jamming narratives. Pre-2023 mean: 4.2/month → 2024+ mean: 10.5/month (**2.5× baseline**). Consistent with IATA's published +193% spoofing increase in the 2025 Safety Report. |
-| **Post-COVID deferred maintenance** | Equipment Critical incidents spiked **May 2022** — flagged by SPC within the first month of the return-to-service surge. 13 consecutive alarm months followed. |
-| **Ghost target incident** | ACN from January 2023: ATC controller reports cloned transponder codes across a 20nm radius. Isolation Forest flagged it from **structured features alone** — no text, no keywords — two years before IATA published spoofing statistics. |
-| **BERTopic independent validation** | BERTopic discovered GPS spoofing (Topic 12, 499 docs) and 5G/altimeter interference (Topic 27, 106 docs) as **separate clusters without being told they exist**. |
-| **Risk quadrant** | 818 RED incidents (novel + anomalous), 14,770 ORANGE, 1,374 YELLOW, 26,867 GREEN across the full 2018–2026 corpus. |
+| **GNSS spoofing emergence** | CUSUM fired first alarm in **April 2024** on spoofing/jamming narratives. Pre-2023 mean: **4.2/month**. 2023+ mean: **10.5/month**, a **2.5x baseline uplift**. |
+| **BERTopic independent validation** | BERTopic independently discovered GPS/jamming/navigation as Topic 12 (**499 incidents**) and 5G/altimeter interference as Topic 27 (**106 incidents**) without being told these categories existed. |
+| **Post-COVID deferred maintenance** | Equipment Critical incidents first alarmed in **May 2022**, consistent with return-to-service stress after COVID disruption. |
+| **2x2 risk quadrant** | The refreshed Layer 1 pipeline found **272 RED**, **6,532 ORANGE**, **1,920 YELLOW**, and **35,105 GREEN** incidents across 43,829 reports. |
+| **Rule-based precursor risk** | Layer 3 scored all **43,829 incidents**. The 90th percentile threshold was **0.225**, producing **5,050 high-risk incidents**. |
+| **RAG analyst assistant** | Layer 4 indexed **3,000 RED/ORANGE incidents** in ChromaDB and ran four cited demo queries through Claude using ACN-level source attribution. |
 
 ---
 
-## The five-layer architecture
+## System Architecture
 
-| Layer | What it does | Approach | Status |
+| Layer | Purpose | Method | Current Status |
 | --- | --- | --- | --- |
-| **1 — Dual anomaly detection** | Flags statistically unusual and structurally novel incidents | SPC (STL + CUSUM) + Isolation Forest → 2×2 risk quadrant | Done |
-| **2 — Semantic pattern discovery** | Discovers and tracks emerging topic clusters in narrative text | BERTopic (UMAP + HDBSCAN + c-TF-IDF) + topics over time | Done |
-| **3 — Rule-based risk scoring** | Scores every incident on five human-factors precursor categories | Transparent term-matching scorer, fully auditable | Done |
-| **4 — RAG analyst assistant** | Answers natural-language queries over flagged incidents with citations | ChromaDB + sentence-transformers + Claude Sonnet 4.6 | Done |
-| **5 — Production agent design** | LangGraph multi-agent orchestration blueprint | Mermaid diagram — Prognosis pattern applied to aviation safety | Done |
+| **Layer 0** | Data ingestion and EDA | ASRS TSV parsing, date normalization, narrative construction | Complete |
+| **Layer 1** | Dual anomaly detection | STL + CUSUM SPC and Isolation Forest | Complete, refreshed |
+| **Layer 2** | Semantic pattern discovery | BERTopic with UMAP, HDBSCAN, c-TF-IDF | Complete, refreshed |
+| **Layer 3** | Precursor risk scoring | Transparent rule-based human-factors scorer | Complete, refreshed |
+| **Layer 4** | RAG analyst assistant | ChromaDB, sentence-transformers, Claude | Complete, refreshed |
+| **Layer 5** | Production architecture | LangGraph multi-agent design | Complete |
+
+---
+
+## Why This Design
+
+The project is designed for a safety-critical review setting.
+
+The key principle is:
+
+> Interpretability and auditability are more important than model sophistication
+> for a proof-of-concept safety early warning system.
+
+That means:
+
+- SPC alarms are tied to exact ASRS anomaly categories and alarm months.
+- Isolation Forest uses structured features only, with no text leakage.
+- Calendar year is excluded from the Isolation Forest to avoid marking later
+  years as novel by construction.
+- Layer 3 uses a transparent rule-based scorer instead of a trained black-box
+  classifier.
+- Layer 4 cites specific incidents by ACN number.
+- The production architecture includes human-in-the-loop review before alert
+  publication.
 
 ---
 
 ## Data
 
-- **Source:** [NASA ASRS Database](https://asrs.arc.nasa.gov/search/database.html)
-- **Coverage:** January 2018 – March 2026
-- **Format:** `.xls` files (TSV with two header rows despite the extension)
-- **Records:** 43,829 incidents after merging 16 batch files
-- **IF Baseline:** 2018–2019 only (12,058 records) — 2020 excluded because COVID disrupted flight operations from March 2020 onward
+| Field | Value |
+| --- | --- |
+| Source | [NASA ASRS Database](https://asrs.arc.nasa.gov/search/database.html) |
+| Coverage | Primarily January 2018 to March 2026 |
+| Records | 43,829 incidents |
+| Raw files | 16 ASRS batch exports |
+| Raw format | `.xls` extension, but actually tab-separated text with two header rows |
+| Merged corpus | `outputs/data/asrs_merged.parquet` |
+| Merged shape | 43,829 rows x 129 columns |
+| Isolation Forest baseline | 2018-2019 only, 12,058 records |
+
+The ASRS export format has two quirks:
+
+1. The files use `.xls` extensions but are not binary Excel files.
+2. The first two rows form a hierarchical header, such as `Aircraft 1 | Flight Phase`.
+
+The loader reads the files as TSV, flattens the two-row headers, parses the
+`Time | Date` field, and constructs a `full_narrative` field from Report 1 and
+Report 2 narratives.
 
 ---
 
-## Layer 1 — Dual Anomaly Detection
+## Layer 0: Data Ingestion and EDA
 
-### What it does
+Layer 0 prepares the analysis corpus.
 
-Two independent anomaly signals are computed per incident and combined into a 2×2 risk quadrant:
+### Main Outputs
 
-- **SPC (Statistical Process Control):** STL seasonal decomposition on monthly incident counts per anomaly category. Two-sided CUSUM (k=0.5, h=5.0) on standardised residuals. Detects when a category shifts to a new frequency regime.
-- **Isolation Forest:** Trained on 2018–2019 structured features (operator type, flight phase, anomaly category, who detected it). Scores every subsequent incident for novelty — how unlike the pre-COVID baseline it is. High score = the model has never seen this combination of features before.
-
-### Modules
-
-| Module | Role |
+| Output | Description |
 | --- | --- |
-| [`src/data_loader.py`](src/data_loader.py) | Loads and merges ASRS TSV batch files; parses two-row header; exports `asrs_merged.parquet` |
-| [`src/spc.py`](src/spc.py) | STL decomposition + two-sided CUSUM per anomaly category; `run_spc_pipeline()` returns monthly series + alarm dates |
-| [`src/anomaly.py`](src/anomaly.py) | Isolation Forest training on 2018–2019 baseline; 2×2 quadrant assignment; `plot_gnss_emergence()` for the spoofing CUSUM chart |
+| `outputs/data/asrs_merged.parquet` | Clean merged ASRS corpus |
+| `date` | Parsed monthly timestamp from `Time \| Date` |
+| `full_narrative` | Report 1 and Report 2 narratives concatenated |
+| `narrative_word_count` | Word count used for NLP filtering |
 
-### Runner scripts
+### Key EDA Conclusions
 
-| Script | Purpose |
+- ASRS reports have strong seasonal structure, with summer peaks and winter troughs.
+- Raw monthly counts are not appropriate for direct CUSUM because seasonality would create false alarms.
+- Narrative text is complete enough to support BERTopic, risk scoring, and RAG.
+- Multi-label anomaly categories must be preserved because one incident can span multiple safety categories.
+- 2018-2019 is the cleanest Isolation Forest baseline because 2020 onward is affected by COVID disruption.
+
+### Relevant Files
+
+| File | Purpose |
 | --- | --- |
-| [`run_layer1.py`](run_layer1.py) | Full Layer 1 pipeline: load → SPC → IF → quadrant → save `asrs_layer1.parquet` |
-| [`run_gnss_demo.py`](run_gnss_demo.py) | Standalone GNSS spoofing emergence chart (tight spoofing/jamming regex + SPC) |
-| [`run_equipment_spc.py`](run_equipment_spc.py) | Standalone Equipment Critical SPC chart (post-COVID maintenance spike) |
-| [`run_red_incidents.py`](run_red_incidents.py) | Prints top 5 RED quadrant narratives; saves `red_top20_incidents.csv` |
+| `src/data_loader.py` | Loads raw ASRS files and writes merged parquet |
+| `notebooks/01_layer0_data_and_eda.ipynb` | EDA and data-quality explanation |
 
-### Data assets
+---
 
-| Asset | Direction | Description |
+## Layer 1: Dual Anomaly Detection
+
+Layer 1 creates two independent anomaly signals and combines them into a 2x2
+risk quadrant.
+
+### Signal 1: Statistical Process Control
+
+SPC answers:
+
+> Is this anomaly category occurring at an unusual frequency?
+
+Method:
+
+- Explode `Events | Anomaly` into exact ASRS taxonomy categories.
+- Build monthly counts for each top anomaly category.
+- Apply STL decomposition to remove trend and seasonality.
+- Run two-sided CUSUM on standardized residuals.
+- Record alarm months per anomaly category.
+
+Parameters:
+
+| Parameter | Value | Meaning |
 | --- | --- | --- |
-| `data/raw/*.xls` | Input | 16 ASRS batch files, 6-month intervals (not committed) |
-| `outputs/data/asrs_merged.parquet` | Intermediate | Raw merged corpus, 43,829 × ~190 cols, 84.2 MB |
-| `outputs/data/asrs_layer1.parquet` | Output | + `if_score`, `if_flag`, `spc_flag`, `quadrant` columns, 84.7 MB |
-| `outputs/data/red_top20_incidents.csv` | Output | Top 20 RED quadrant incidents by IF score, 21 rows |
+| STL period | 12 | Monthly seasonality |
+| CUSUM `k` | 0.5 | Allowance parameter |
+| CUSUM `h` | 5.0 | Control limit |
 
-### Output figures
+### Signal 2: Isolation Forest
 
-| Figure | Description |
-| --- | --- |
-| [`outputs/figures/layer1_spc_cusum.png`](outputs/figures/layer1_spc_cusum.png) | Two-panel CUSUM chart for top 5 anomaly categories — monthly counts + cumulative sum with alarm shading |
-| [`outputs/figures/2x2_quadrant.png`](outputs/figures/2x2_quadrant.png) | 2×2 risk quadrant scatter: IF novelty score (x) vs SPC alarm flag (y), coloured by quadrant |
-| [`outputs/figures/gnss_emergence.png`](outputs/figures/gnss_emergence.png) | GNSS spoofing monthly counts + STL + CUSUM — first alarm April 2024 marked |
-| [`outputs/figures/equipment_critical_spc.png`](outputs/figures/equipment_critical_spc.png) | Equipment Critical SPC chart — May 2022 first alarm, 13 alarm months |
+Isolation Forest answers:
 
-### Key results
+> Does this incident look unlike normal pre-COVID operations?
+
+Training baseline:
+
+- 2018-2019 only
+- 12,058 records
+- 2020 excluded due to COVID disruption
+
+Features:
+
+- `Aircraft 1 | Flight Phase`
+- `Aircraft 1 | Aircraft Operator`
+- `Events | Detector`
+- `Events | Result`
+- `Assessments | Primary Problem`
+- Cyclic month features: `month_sin`, `month_cos`
+
+Important modeling choice:
+
+- Calendar year is deliberately excluded.
+- Categorical fields are one-hot encoded.
+- The model does not use narrative text or GNSS keywords.
+
+### 2x2 Quadrant
+
+| Quadrant | SPC Flag | IF Flag | Interpretation |
+| --- | --- | --- | --- |
+| **RED** | 1 | 1 | Novel and anomalously frequent |
+| **ORANGE** | 1 | 0 | Known category spiking |
+| **YELLOW** | 0 | 1 | Novel but not yet frequent |
+| **GREEN** | 0 | 0 | Known and normal frequency |
+
+An incident receives `spc_flag = 1` only when one of its own anomaly categories
+alarmed in that same month. This avoids marking unrelated incidents as anomalous
+just because another category breached CUSUM in the same calendar month.
+
+### Layer 1 Results
 
 ```text
-Quadrant breakdown (43,829 incidents):
-  GREEN  (known, normal frequency)      26,867   61.3%
-  ORANGE (known, anomalous frequency)   14,770   33.7%
-  YELLOW (novel, normal frequency)       1,374    3.1%
-  RED    (novel, anomalous frequency)      818    1.9%
+Quadrant breakdown, 43,829 incidents:
 
-SPC first alarms:
-  Equipment Critical    May 2022   post-COVID deferred maintenance
-  ATC Issues            Feb 2020   COVID groundings -> ATC breakdown
-  Procedural Policy     Oct 2019   pre-COVID deviation surge
-
-GNSS spoofing:
-  Pre-2023 mean: 4.2/month
-  2024+ mean:   10.5/month  (2.5x baseline)
-  First CUSUM alarm: April 2024
+GREEN   known, normal frequency       35,105   80.1%
+ORANGE  known, anomalous frequency     6,532   14.9%
+YELLOW  novel, normal frequency        1,920    4.4%
+RED     novel, anomalous frequency       272    0.6%
 ```
 
----
-
-## Layer 2 — Semantic Pattern Discovery
-
-### What it does
-
-BERTopic runs on the full narrative corpus (43,829 documents) to discover and track topic clusters independently of the SPC/IF anomaly signals. Key design decisions:
-
-- **Embeddings:** `all-MiniLM-L6-v2` (sentence-transformers) — fast CPU inference, 384 dimensions
-- **Dimensionality reduction:** UMAP (`n_components=5`, `low_memory=True`)
-- **Clustering:** HDBSCAN (`min_cluster_size=30`)
-- **Topic reduction:** `nr_topics=40` (from 94 natural clusters)
-- **Temporal tracking:** `topics_over_time` with `nr_bins=99` to track topic volume by year
-
-The GNSS spoofing signal is validated independently: BERTopic found two distinct RF interference clusters (GPS jamming and 5G/altimeter) without any guidance.
-
-### Modules
-
-| Module | Role |
-| --- | --- |
-| [`src/topics.py`](src/topics.py) | `run_bertopic()`, `find_gnss_topic_ids()`, `get_topic_summary()`, `plot_topic_landscape()`, `plot_gnss_timeline()`, `plot_red_quadrant_topics()`, `plot_topic_heatmap()`, `compute_semantic_drift()` |
-
-### Runner scripts
-
-| Script | Purpose |
-| --- | --- |
-| [`run_layer2.py`](run_layer2.py) | Full Layer 2: loads `asrs_layer1.parquet`, runs BERTopic, saves model + topic assignments back to parquet |
-
-### Data assets
-
-| Asset | Direction | Description |
-| --- | --- | --- |
-| `outputs/data/asrs_layer1.parquet` | Input | Layer 1 enriched corpus with quadrant assignments |
-| `outputs/data/asrs_layer2.parquet` | Output | + `topic_id`, `topic_label` columns, 43,829 × 206 cols, 84.7 MB |
-| `outputs/data/bertopic_model/` | Output | Saved BERTopic model (safetensors serialisation) |
-| `outputs/data/layer2_topic_summary.csv` | Output | 39 topics × keywords + document counts, 21 rows |
-
-### Output figures
-
-| Figure | Description |
-| --- | --- |
-| [`outputs/figures/layer2_topic_landscape.png`](outputs/figures/layer2_topic_landscape.png) | Top 20 BERTopic clusters by document count |
-| [`outputs/figures/layer2_gnss_emergence.png`](outputs/figures/layer2_gnss_emergence.png) | GNSS topic (Topic 12) document count by year — BERTopic semantic validation |
-| [`outputs/figures/layer2_red_topics.png`](outputs/figures/layer2_red_topics.png) | Topic distribution within RED quadrant incidents |
-| [`outputs/figures/layer2_topic_heatmap.png`](outputs/figures/layer2_topic_heatmap.png) | Topic × year heatmap showing growth trajectories |
-
-### Key results
+Selected SPC first alarms:
 
 ```text
-Topics discovered: 39 (reduced from 94 natural HDBSCAN clusters)
-Noise documents:   16,376 (38% -- normal for heterogeneous safety text)
-
-Top topics by volume:
-  Topic 0:  3,429 docs  Engine incidents
-  Topic 1:  3,397 docs  Approach / traffic
-  Topic 2:  2,980 docs  Gear / landing / runway
-  Topic 3:  2,760 docs  Ground ops / runway incursion
-  Topic 9:    807 docs  Drone / UAS conflicts
-  Topic 12:   499 docs  GPS / jamming / navigation  <- GNSS cluster
-  Topic 13:   424 docs  COVID mask incidents
-  Topic 27:   106 docs  5G / altimeter interference <- separate RF cluster
-
-GNSS topic (Topic 12) by year:
-  2018: 36  2019: 62  2020: 18  2021: 95  2022: 50
-  2023: 80  2024: 151 (peak)    2025: 112 (sustained)
+Equipment Critical    May 2022   post-COVID deferred maintenance signal
+ATC Issues            Feb 2020   COVID disruption / ATC breakdown
+Procedural Policy     Oct 2019   pre-COVID deviation surge
 ```
+
+GNSS narrative signal:
+
+```text
+Pre-2023 mean:       4.2 incidents/month
+2023+ mean:         10.5 incidents/month
+Uplift:              2.5x baseline
+First CUSUM alarm:   April 2024
+```
+
+### Layer 1 Files
+
+| File | Purpose |
+| --- | --- |
+| `src/spc.py` | STL + CUSUM computation |
+| `src/anomaly.py` | Isolation Forest and quadrant assignment |
+| `src/helper.py` | Category parsing, matching, and shared helpers |
+| `src/plotter.py` | Plotting functions |
+| `run_layer1.py` | Full Layer 1 runner |
+| `run_gnss_demo.py` | Standalone GNSS emergence chart |
+| `run_equipment_spc.py` | Equipment Critical SPC chart |
+| `run_red_incidents.py` | RED incident export |
+
+### Layer 1 Outputs
+
+| Output | Shape / Count | Description |
+| --- | --- | --- |
+| `outputs/data/asrs_layer1.parquet` | 43,829 x 204 | Layer 1 enriched corpus |
+| `outputs/data/red_top20_incidents.csv` | 20 rows | Top RED incidents by IF score |
+| `outputs/figures/layer1_spc_cusum.png` | Figure | SPC CUSUM panels |
+| `outputs/figures/2x2_quadrant.png` | Figure | Quadrant chart |
+| `outputs/figures/gnss_emergence.png` | Figure | GNSS narrative CUSUM |
+| `outputs/figures/equipment_critical_spc.png` | Figure | Equipment Critical SPC |
 
 ---
 
-## Layer 3 — Rule-Based Risk Scorer
+## Layer 2: Semantic Pattern Discovery
 
-### What it does
+Layer 2 uses BERTopic to discover narrative themes independently of the Layer 1
+structured anomaly signals.
 
-Assigns a transparent precursor risk score (0–1) to every incident based on five human-factors categories. Deliberately rule-based, not ML.
+Layer 2 answers:
 
-**Architecture decision:** Every score component maps directly to a known human factors category. A safety analyst can point to exactly which terms drove the score without needing to understand gradient boosting or SHAP values. Appropriate for a proof-of-concept in a regulated safety environment. In production this would be replaced by a LightGBM classifier trained on ASRS/NTSB accident-linkage data.
+> What are pilots, controllers, and crews actually talking about, and how are
+> those topics changing over time?
 
-Five weighted components (each capped at 2 term hits):
+### Method
+
+| Component | Choice |
+| --- | --- |
+| Embedding model | `all-MiniLM-L6-v2` |
+| Embedding dimension | 384 |
+| Dimensionality reduction | UMAP |
+| Clustering | HDBSCAN |
+| Topic representation | c-TF-IDF |
+| Topic reduction | Reduced from 94 natural clusters to 40 topic IDs |
+| Topics discovered | 39 non-noise topics |
+| Noise documents | 16,376 |
+
+The noise rate is expected for heterogeneous aviation safety narratives. In
+BERTopic, noise means the document does not belong confidently to a dense topic
+cluster; it does not mean the report is unusable.
+
+### Layer 2 Run Summary
+
+```text
+Input records:       43,829
+Documents modeled:   42,967
+Dropped records:        862 short or undated records
+Topics discovered:       39
+Noise documents:     16,376
+Output shape:        43,829 x 206
+```
+
+### Top Topics
+
+| Topic | Count | Interpretation |
+| --- | ---: | --- |
+| 0 | 3,429 | Engine incidents |
+| 1 | 3,397 | Approach / traffic |
+| 2 | 2,980 | Gear / landing / runway |
+| 3 | 2,760 | Ground operations / runway incursion |
+| 4 | 2,194 | Smoke / smell / odor |
+| 5 | 1,634 | Turbulence / wake |
+| 6 | 1,121 | Maintenance / MEL |
+| 7 | 1,023 | Brakes / tug / parking |
+| 8 | 886 | Door / passenger |
+| 9 | 807 | Drone / UAS conflicts |
+| 12 | 499 | GPS / jamming / navigation |
+| 13 | 424 | COVID mask incidents |
+| 27 | 106 | 5G / altimeter interference |
+
+### GNSS Validation
+
+BERTopic independently found two related but distinct RF-interference topics:
+
+| Topic | Count | Top terms | Interpretation |
+| --- | ---: | --- | --- |
+| 12 | 499 | gps, jamming, navigation, anp | GPS / jamming / navigation |
+| 27 | 106 | altimeter, setting, 5g, interference | 5G / altimeter interference |
+
+This is an important validation result: the model separated GPS interference and
+5G altimeter interference without being given either category as a label.
+
+### GNSS Topic Frequency by Year
+
+```text
+2018     36
+2019     62
+2020     18
+2021     95
+2022     50
+2023     80
+2024    151
+2025    112
+```
+
+The peak in 2024 and sustained elevation in 2025 align with the Layer 1 GNSS
+narrative CUSUM signal.
+
+### Layer 2 Files
+
+| File | Purpose |
+| --- | --- |
+| `src/topics.py` | BERTopic, topic lookup, summaries, semantic drift helpers |
+| `run_layer2.py` | Full Layer 2 runner |
+
+### Layer 2 Outputs
+
+| Output | Shape / Count | Description |
+| --- | --- | --- |
+| `outputs/data/asrs_layer2.parquet` | 43,829 x 206 | Corpus with `topic_id` and `topic_label` |
+| `outputs/data/layer2_topic_summary.csv` | 20 rows | Top topic summary |
+| `outputs/data/bertopic_model/` | Directory | Saved BERTopic model |
+| `outputs/figures/layer2_topic_landscape.png` | Figure | Top topic landscape |
+| `outputs/figures/layer2_gnss_emergence.png` | Figure | GNSS topic emergence |
+| `outputs/figures/layer2_red_topics.png` | Figure | RED quadrant topic distribution |
+| `outputs/figures/layer2_topic_heatmap.png` | Figure | Topic x year heatmap |
+
+---
+
+## Layer 3: Rule-Based Precursor Risk Scorer
+
+Layer 3 adds a transparent human-factors risk lens to every incident.
+
+Layer 3 answers:
+
+> Does the narrative contain precursor language associated with higher operational
+> risk, such as fatigue, near-miss language, communication breakdown, procedural
+> deviation, or urgency?
+
+This is deliberately not a trained ML model.
+
+### Why Rule-Based
+
+A rule-based scorer is appropriate here because:
+
+- Every component is auditable by a safety analyst.
+- No labeled accident-linkage dataset is required.
+- No calibration, PR-AUC, class imbalance, or SHAP methodology needs to be defended.
+- Each score can be traced to matched terms.
+- The model is transparent enough for a regulated safety proof of concept.
+
+In production, this could be replaced by a supervised classifier trained on
+ASRS/NTSB linkage data. For this case study, transparency is the correct tradeoff.
+
+### Components
 
 | Component | Weight | Example terms |
-| --- | --- | --- |
+| --- | ---: | --- |
 | `fatigue` | 2.5 | fatigue, tired, exhausted, duty time, not rested |
-| `near_miss` | 2.5 | nearly, almost, nmac, close call, feet away |
+| `near_miss` | 2.5 | nearly, almost, close call, nmac, feet away |
 | `comm_breakdown` | 2.0 | miscommunication, wrong frequency, readback, misheard |
 | `procedure_deviation` | 1.5 | skipped, omitted, failed to, non-standard, violation |
-| `urgency` | 1.5 | emergency, mayday, pan pan, dangerous, critical |
+| `urgency` | 1.5 | emergency, mayday, pan pan, critical, dangerous |
 
-Final score: `min(weighted_sum / max_possible, 1.0)`
+Each component is capped at two weighted hits for the final score so that one
+category cannot dominate the entire score through repeated terms.
 
-A separate GNSS forecast uses LightGBM with lag features (lags 1/2/3/6/12 months + rolling statistics) on the monthly spoofing/jamming count series to project 6 months beyond the data end.
-
-### Modules
-
-| Module | Role |
-| --- | --- |
-| [`src/risk_scorer.py`](src/risk_scorer.py) | `score_incident()`, `apply_risk_scorer()`, `plot_risk_distribution()`, `export_high_risk_incidents()` |
-| [`src/forecasting.py`](src/forecasting.py) | Time-series feature engineering and LightGBM GNSS forecast |
-
-### Runner scripts
-
-| Script | Purpose |
-| --- | --- |
-| [`run_layer3.py`](run_layer3.py) | Scores all 43,829 incidents; exports risk distribution chart and high-risk CSV |
-| [`run_gnss_forecast.py`](run_gnss_forecast.py) | LightGBM 6-month forecast on GNSS monthly count series |
-
-### Data assets
-
-| Asset | Direction | Description |
-| --- | --- | --- |
-| `outputs/data/asrs_layer2.parquet` | Input | Layer 2 corpus with topic assignments |
-| `outputs/data/asrs_layer3.parquet` | Output | + `precursor_score`, `component_fatigue`, `component_near_miss`, `component_comm_breakdown`, `component_procedure_deviation`, `component_urgency`, `high_precursor_risk`; 43,829 × 213 cols, 84.8 MB |
-| `outputs/data/layer3_high_risk_incidents.csv` | Output | Top 100 RED/ORANGE incidents by precursor score with narrative preview, 101 rows, 54 KB |
-
-### Output figures
-
-| Figure | Description |
-| --- | --- |
-| [`outputs/figures/precursor_risk_distribution.png`](outputs/figures/precursor_risk_distribution.png) | Two-panel: risk score histogram (RED+ORANGE) with 90th-pct threshold + mean component scores for top 50 incidents |
-| [`outputs/figures/gnss_forecast.png`](outputs/figures/gnss_forecast.png) | GNSS monthly count actuals + LightGBM 6-month forecast (Mar–Aug 2026) showing elevated rate continuing above baseline |
-
-### Key results
+Final score:
 
 ```text
-Incidents scored: 43,829
-Score range:      0.000 - 0.900  (mean: 0.094)
-90th-pct threshold: 0.250
-High-risk incidents (>= 90th pct): 4,889
-
-Top scoring incident: ACN 2317180 (Dec 2025)
-  Score: 0.900  |  Fatigue: 2  |  Near-miss: 2  |  Urgency: 3
-  Anomaly: Aircraft Equipment Problem Critical; Inflight Fuel Issue
-
-GNSS forecast (LightGBM, lags 1/2/3/6/12):
-  Mar 2026: 10.7  Apr 2026: 12.1  May 2026: 8.1
-  Jun 2026: 7.1   Jul 2026: 5.4   Aug 2026: 7.0
-  All months above pre-2023 baseline (4.2/month)
+precursor_score = min(weighted_sum / max_possible_score, 1.0)
 ```
+
+### Layer 3 Run Summary
+
+```text
+Input records:            43,829
+Input columns:               206
+Output columns:              218
+Mean precursor score:      0.088
+Median precursor score:    0.075
+Score range:           0.000-0.825
+90th percentile:           0.225
+High-risk incidents:       5,050
+```
+
+### High-Risk Rate by Quadrant
+
+| Quadrant | High-risk Count | Total | Rate |
+| --- | ---: | ---: | ---: |
+| GREEN | 4,116 | 35,105 | 11.7% |
+| ORANGE | 712 | 6,532 | 10.9% |
+| RED | 50 | 272 | 18.4% |
+| YELLOW | 172 | 1,920 | 9.0% |
+
+RED has the highest high-risk rate, which is directionally consistent with the
+Layer 1 anomaly logic. GREEN can still contain high precursor language because
+Layer 3 measures narrative human-factors risk, not statistical novelty or
+frequency anomaly. The layers are complementary rather than redundant.
+
+### Top Scoring Incident in Layer 3
+
+```text
+ACN:               1979746
+Date:              March 2023
+Quadrant:          RED
+Precursor score:   0.825
+
+Component hits:
+  fatigue:               4
+  communication:         1
+  near_miss:             3
+  procedure_deviation:   1
+  urgency:               2
+```
+
+### Layer 3 Files
+
+| File | Purpose |
+| --- | --- |
+| `src/risk_scorer.py` | Rule-based scoring and high-risk export |
+| `run_layer3.py` | Full Layer 3 runner |
+
+### Layer 3 Outputs
+
+| Output | Shape / Count | Description |
+| --- | --- | --- |
+| `outputs/data/asrs_layer3.parquet` | 43,829 x 218 | Full corpus with precursor risk columns |
+| `outputs/data/layer3_high_risk_incidents.csv` | 100 rows | Top RED/ORANGE incidents by precursor score |
+| `outputs/figures/precursor_risk_distribution.png` | Figure | Risk score histogram and component breakdown |
 
 ---
 
-## Layer 4 — RAG Analyst Assistant
+## Layer 4: RAG Analyst Assistant
 
-### What it does
+Layer 4 provides a natural-language analyst interface over high-priority ASRS
+incidents.
 
-Indexes all flagged (RED + ORANGE) incidents in ChromaDB. Accepts natural-language analyst queries, retrieves semantically relevant incidents with metadata filtering, and generates cited answers via Claude Sonnet 4.6. Every claim is linked to a specific ACN number.
+Layer 4 answers questions like:
 
-**Architecture decisions:**
+- What patterns appear in GPS or navigation incidents?
+- Which incidents show ATC-pilot communication breakdown?
+- What serious fatigue incidents appear in the corpus?
+- What do RED quadrant incidents have in common?
 
-- **ChromaDB (persistent):** Zero server setup; appropriate for a proof of concept. Production target: Qdrant with BGE-M3 for hybrid dense + sparse retrieval (aviation acronyms like TCAS, NMAC need exact term matching alongside semantic search).
-- **`all-MiniLM-L6-v2`:** Fast CPU inference, 384 dimensions, cosine similarity. Known limitation: aviation acronyms may not be optimally embedded. Production fix: fine-tune on ASRS narratives + SKYbrary articles.
-- **Rich metadata per document:** `quadrant`, `precursor_score`, `if_score`, `spc_flag`, `topic_label`, `component_fatigue/near_miss/comm_breakdown` — enables filtered queries beyond pure semantic search.
-- **System prompt forbids confabulation:** "If evidence is insufficient, say so explicitly." Non-hallucination is a hard requirement in safety-critical applications.
-- **Persistence:** Index saved to `outputs/data/chromadb/`; subsequent runs load in ~8s, skipping the ~3-minute embed.
+### Method
 
-### Modules
-
-| Module | Role |
+| Component | Choice |
 | --- | --- |
-| [`src/rag.py`](src/rag.py) | `build_rag_index()`, `rag_query()`, `run_all_demos()`, `DEMO_QUERIES` list |
+| Vector store | ChromaDB PersistentClient |
+| Embedding model | `all-MiniLM-L6-v2` |
+| Indexed incidents | Top 3,000 RED/ORANGE incidents |
+| Selection logic | Prioritized by `precursor_score`, then `if_score` |
+| LLM | Claude Sonnet 4.6 |
+| Citations | ACN-level source citations |
+| Persistence | `outputs/data/chromadb/` |
 
-### Runner scripts
-
-| Script | Purpose |
-| --- | --- |
-| [`run_layer4.py`](run_layer4.py) | Builds/loads ChromaDB index; runs all 4 DEMO_QUERIES with live Claude API |
-
-### Data assets
-
-| Asset | Direction | Description |
-| --- | --- | --- |
-| `outputs/data/asrs_layer3.parquet` | Input | Full enriched corpus with all Layer 1–3 signals |
-| `outputs/data/chromadb/` | Output | Persistent ChromaDB HNSW index — 3,000 incidents × 384-dim cosine embeddings + SQLite metadata (~82 MB) |
-
-### Index composition
+### Indexed Dataset
 
 ```text
-Total indexed:    3,000 incidents (top by precursor_score from RED+ORANGE)
-  RED quadrant:     131 incidents
-  ORANGE quadrant: 2,869 incidents
-
-Embedding time:   ~173s on CPU (17 incidents/sec) -- first run only
-Load time:          ~8s on subsequent runs (from persisted index)
+RED + ORANGE incidents available:  6,804
+Incidents indexed:                 3,000
+RED indexed:                         165
+ORANGE indexed:                    2,835
+Index build time:                  224.2 seconds
 ```
 
-### Demo queries
+The index is persisted to disk, so subsequent runs can load the existing index
+without recomputing embeddings.
 
-| # | Query | Filter | Tests |
+### Metadata Stored Per Incident
+
+Each indexed document includes metadata such as:
+
+- ACN
+- date
+- year
+- anomaly category
+- flight phase
+- quadrant
+- SPC flag
+- IF score
+- precursor score
+- topic label
+- fatigue component count
+- near-miss component count
+- communication-breakdown component count
+
+This means Layer 4 is not just semantic search. It supports filtered retrieval
+by risk score, quadrant, and other structured signals.
+
+### Demo Queries
+
+| # | Query | Filter | Purpose |
 | --- | --- | --- | --- |
-| 1 | GPS/navigation errors and unusual radar targets in 2023 | None | GNSS signal retrieval |
-| 2 | Communication breakdown patterns between ATC and pilots | None | `comm_breakdown` component |
-| 3 | Serious fatigue or inadequate rest incidents | `precursor_score >= 0.3` | Metadata score filter |
-| 4 | What do RED quadrant incidents have in common? | `quadrant = RED` | Quadrant metadata filter |
+| 1 | What patterns appear in incidents involving GPS, navigation errors, or unusual radar targets in 2023? | None | GNSS / radar retrieval |
+| 2 | Which incidents show communication breakdown between ATC and pilots, and what were the outcomes? | None | Communication-breakdown component |
+| 3 | Show me the most serious incidents where pilots reported fatigue or inadequate rest. | `precursor_score >= 0.3` | Risk-score metadata filter |
+| 4 | What do the RED quadrant incidents have in common? | `quadrant = RED` | Quadrant metadata filter |
 
-**Live demo query for the presentation:** Query 4 with `filter_quadrant="RED"`. Surfaces three converging patterns: ATC inter-sector handoff failures, weather-induced airspace compression, and compounding simultaneous conflicts.
+### Layer 4 Run Result
 
-### Streamlit Interface
+Layer 4 successfully:
 
-A web interface for the RAG query system, built with Streamlit. Run with `uv run streamlit run app.py` — no Jupyter required.
+- Loaded asrs_layer3.parquet
+- Built a fresh ChromaDB index
+- Embedded 3,000 narratives on CPU
+- Ran a semantic spot-check query
+- Detected `ANTHROPIC_API_KEY`
+- Ran all four Claude demo queries
+- Returned cited answers with ACN-level sources
 
-![ASRS RAG Query Interface](outputs/figures/streamlit_demo.png)
+### Layer 4 Files
 
-### Running additional queries
+| File | Purpose |
+| --- | --- |
+| `src/rag.py` | Chroma indexing, retrieval, Claude answer generation |
+| `run_layer4.py` | Builds or loads index and runs demo queries |
+| `app.py` | Streamlit analyst interface |
 
-```python
-from src.rag import build_rag_index, rag_query
-import pandas as pd
+### Layer 4 Outputs
 
-asrs = pd.read_parquet("outputs/data/asrs_layer3.parquet")
-collection, client, embedding_model = build_rag_index(asrs)  # loads from disk in ~8s
+| Output | Description |
+| --- | --- |
+| `outputs/data/chromadb/` | Persistent ChromaDB index and metadata |
+| Console logs | Demo query answers with cited ACN sources |
 
-answer = rag_query(
-    "What emerging risks appear in 2024 that were not present in 2019?",
-    collection, embedding_model
-)
-print(answer)
+---
+
+## Layer 5: Production Agent Architecture
+
+Layer 5 is the production design for turning this prototype into an operational
+early warning workflow.
+
+It uses a LangGraph multi-agent architecture based on the same orchestration
+pattern used in Prognosis.
+
+### Core Flow
+
+```text
+Signal flags
+  -> Supervisor
+  -> Planner
+  -> Parallel workers
+  -> Relevancy assessment
+  -> Token trimming
+  -> Sufficiency loop
+  -> Brief generation
+  -> Self critique
+  -> Human-in-the-loop review
+  -> Publish
 ```
 
+### Production Nodes
+
+| Node | Purpose |
+| --- | --- |
+| Supervisor | Reads signal flags and sets investigation scope |
+| Planner | Converts signals into investigation questions |
+| ASRS Retriever | Retrieves similar incident narratives |
+| NTSB Linker | Links patterns to historical accident data |
+| Weather Enricher | Adds weather context |
+| Trend Analyser | Adds frequency trajectory context |
+| Relevancy Assessment | Tags chunks to investigation questions |
+| Token Trimming | Deduplicates and trims context |
+| Sufficiency Assessment | Checks whether enough evidence exists |
+| Brief Generator | Writes cited safety brief |
+| Self Critique | Checks faithfulness and evidence use |
+| HITL Review | Analyst approval before publication |
+| Publish Brief | Writes final alert and audit log |
+
+### Files
+
+| File | Purpose |
+| --- | --- |
+| production_agent.mmd | Mermaid source diagram |
+| production_agent.png | Rendered architecture diagram |
+
 ---
 
-## Layer 5 — Production Agent Design
+## Running the Pipeline
 
-LangGraph multi-agent orchestration — the Prognosis pattern applied to aviation safety.
-Source: [`architecture/production_agent.mmd`](architecture/production_agent.mmd)
-
-![LangGraph Production Agent Architecture](architecture/production_agent.png)
-
-**Nodes:** Supervisor → Planner → Fan-out workers (ASRS retriever, NTSB linker, Weather enricher, Trend analyser) → Relevancy assessment → Token trimming → Sufficiency loop → Generate brief → Self-critique → HITL interrupt → Publish.
-
-**State:** `EarlyWarningState` TypedDict with `signal_flags`, `incident_ids`, `themes`, `risk_scores`, `enabled_tools`, `gap_reasoning`, `iteration`, `brief_draft`, `analyst_override`. Chunks list uses `operator.add` reducer for parallel fan-in.
-
----
-
-## Running the full pipeline
+### Install Dependencies
 
 ```bash
-# Install dependencies
 uv sync
+```
 
-# Set API key for Layer 4
-echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env
+### Configure API Key for Layer 4
 
-# Layer 1: SPC + Isolation Forest + 2x2 quadrant (~2 min)
+Create a .env file:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Layer 4 requires the API key for answer generation. Layers 0-3 do not.
+
+### Run Layers
+
+```bash
+# Layer 1: SPC + Isolation Forest + quadrant assignment
 uv run python run_layer1.py
 
-# Layer 1 standalone charts
+# Optional Layer 1 standalone outputs
 uv run python run_gnss_demo.py
 uv run python run_equipment_spc.py
 uv run python run_red_incidents.py
 
-# Layer 2: BERTopic topic modelling (~15 min CPU)
+# Layer 2: BERTopic semantic pattern discovery
 uv run python run_layer2.py
 
-# Layer 3: Rule-based risk scorer + GNSS forecast (~30 sec)
+# Layer 3: Rule-based precursor risk scorer
 uv run python run_layer3.py
-uv run python run_gnss_forecast.py
 
-# Layer 4: Build ChromaDB index + run demo queries (~3 min first run, ~8s after)
+# Layer 4: ChromaDB RAG demo
 uv run python run_layer4.py
 
-# Layer 4: Streamlit analyst UI (interactive queries)
+# Layer 4: Streamlit UI
 uv run streamlit run app.py
+```
+
+### Run Notebooks
+
+```bash
+uv run jupyter nbconvert --to notebook --execute --inplace notebooks/01_layer0_data_and_eda.ipynb --ExecutePreprocessor.timeout=1800
+uv run jupyter nbconvert --to notebook --execute --inplace notebooks/02_layer1_anomaly_detection.ipynb --ExecutePreprocessor.timeout=1800
+uv run jupyter nbconvert --to notebook --execute --inplace notebooks/03_layer2_bertopic.ipynb --ExecutePreprocessor.timeout=3600
+uv run jupyter nbconvert --to notebook --execute --inplace notebooks/04_layer3_risk_scorer.ipynb --ExecutePreprocessor.timeout=1800
+uv run jupyter nbconvert --to notebook --execute --inplace notebooks/05_layer4_rag.ipynb --ExecutePreprocessor.timeout=1800
 ```
 
 ---
 
-## All output files
+## Checkpoints
+
+Layer 2 and Layer 4 are the most expensive stages because they embed text.
+
+Checkpoint copies are stored under:
+
+```text
+outputs/data/checkpoints/
+```
+
+Current checkpointed artifacts include:
+
+| Artifact | Purpose |
+| --- | --- |
+| `asrs_layer2_2026-06-27.parquet` | Layer 2 enriched corpus |
+| `asrs_layer3_2026-06-27.parquet` | Layer 3 enriched corpus |
+| `layer2_topic_summary_2026-06-27.csv` | Layer 2 topic summary |
+| `layer3_high_risk_incidents_2026-06-27.csv` | Layer 3 high-risk export |
+| `bertopic_model_2026-06-27/` | Saved BERTopic model |
+| `layer2_topic_landscape_2026-06-27.png` | Layer 2 topic plot |
+| `layer2_gnss_emergence_2026-06-27.png` | Layer 2 GNSS plot |
+| `layer2_red_topics_2026-06-27.png` | Layer 2 RED topic plot |
+| `layer2_topic_heatmap_2026-06-27.png` | Layer 2 heatmap |
+| `precursor_risk_distribution_2026-06-27.png` | Layer 3 risk plot |
+
+To restore key parquet checkpoints:
+
+```powershell
+Copy-Item outputs\data\checkpoints\asrs_layer2_2026-06-27.parquet outputs\data\asrs_layer2.parquet -Force
+Copy-Item outputs\data\checkpoints\asrs_layer3_2026-06-27.parquet outputs\data\asrs_layer3.parquet -Force
+Copy-Item outputs\data\checkpoints\bertopic_model_2026-06-27 outputs\data\bertopic_model -Recurse -Force
+```
+
+---
+
+## Output Files
+
+### Data
+
+| File | Layer | Shape / Count | Description |
+| --- | --- | --- | --- |
+| asrs_merged.parquet | 0 | 43,829 x 129 | Clean merged corpus |
+| asrs_layer1.parquet | 1 | 43,829 x 204 | IF score, SPC flag, quadrant, anomaly indicators |
+| asrs_layer2.parquet | 2 | 43,829 x 206 | Adds topic ID and topic label |
+| asrs_layer3.parquet | 3 | 43,829 x 218 | Adds precursor risk score and components |
+| red_top20_incidents.csv | 1 | 20 rows | Top RED incidents by IF score |
+| layer2_topic_summary.csv | 2 | 20 rows | Topic keywords and document counts |
+| layer3_high_risk_incidents.csv | 3 | 100 rows | Top RED/ORANGE incidents by precursor score |
+| bertopic_model | 2 | Directory | Saved BERTopic model |
+| `outputs/data/chromadb/` | 4 | Directory | Persistent ChromaDB index |
 
 ### Figures
 
 | File | Layer | Description |
 | --- | --- | --- |
-| [`outputs/figures/layer1_spc_cusum.png`](outputs/figures/layer1_spc_cusum.png) | 1 | CUSUM control charts for top 5 anomaly categories |
-| [`outputs/figures/2x2_quadrant.png`](outputs/figures/2x2_quadrant.png) | 1 | 2×2 risk quadrant — 43,829 incidents plotted |
-| [`outputs/figures/gnss_emergence.png`](outputs/figures/gnss_emergence.png) | 1 | GNSS spoofing monthly series + CUSUM, first alarm Apr 2024 |
-| [`outputs/figures/equipment_critical_spc.png`](outputs/figures/equipment_critical_spc.png) | 1 | Equipment Critical SPC — post-COVID maintenance spike |
-| [`outputs/figures/layer2_topic_landscape.png`](outputs/figures/layer2_topic_landscape.png) | 2 | Top 20 BERTopic clusters by document count |
-| [`outputs/figures/layer2_gnss_emergence.png`](outputs/figures/layer2_gnss_emergence.png) | 2 | GNSS topic (Topic 12) document count by year |
-| [`outputs/figures/layer2_red_topics.png`](outputs/figures/layer2_red_topics.png) | 2 | Topic distribution within RED quadrant incidents |
-| [`outputs/figures/layer2_topic_heatmap.png`](outputs/figures/layer2_topic_heatmap.png) | 2 | Topic × year heatmap showing growth trajectories |
-| [`outputs/figures/precursor_risk_distribution.png`](outputs/figures/precursor_risk_distribution.png) | 3 | Risk score histogram + component breakdown for top 50 |
-| [`outputs/figures/gnss_forecast.png`](outputs/figures/gnss_forecast.png) | 3 | LightGBM 6-month GNSS forecast (Mar–Aug 2026) |
-
-### Data
-
-| File | Layer | Rows x Cols | Size | Description |
-| --- | --- | --- | --- | --- |
-| `outputs/data/asrs_merged.parquet` | 0 | 43,829 x ~190 | 84.2 MB | Raw merged corpus |
-| `outputs/data/asrs_layer1.parquet` | 1 | 43,829 x ~194 | 84.7 MB | + IF score, SPC flag, quadrant |
-| `outputs/data/asrs_layer2.parquet` | 2 | 43,829 x 206 | 84.7 MB | + topic_id, topic_label |
-| `outputs/data/asrs_layer3.parquet` | 3 | 43,829 x 213 | 84.8 MB | + precursor_score, 5 components, high_risk flag |
-| `outputs/data/red_top20_incidents.csv` | 1 | 20 rows | 5 KB | Top RED incidents by IF score |
-| `outputs/data/layer2_topic_summary.csv` | 2 | 21 rows | 2 KB | 39 topics x keywords + counts |
-| `outputs/data/layer3_high_risk_incidents.csv` | 3 | 100 rows | 54 KB | Top 100 RED/ORANGE by precursor score + narrative preview |
-| `outputs/data/bertopic_model/` | 2 | — | — | Saved BERTopic model (safetensors) |
-| `outputs/data/chromadb/` | 4 | 3,000 vectors | ~82 MB | Persistent ChromaDB HNSW index + SQLite metadata |
+| layer1_spc_cusum.png | 1 | CUSUM control charts |
+| 2x2_quadrant.png | 1 | Risk quadrant chart |
+| gnss_emergence.png | 1 | GNSS narrative CUSUM |
+| equipment_critical_spc.png | 1 | Equipment Critical SPC |
+| layer2_topic_landscape.png | 2 | Top BERTopic clusters |
+| layer2_gnss_emergence.png | 2 | GNSS topic trajectory |
+| layer2_red_topics.png | 2 | RED quadrant topic distribution |
+| layer2_topic_heatmap.png | 2 | Topic x year heatmap |
+| precursor_risk_distribution.png | 3 | Risk score distribution |
 
 ---
 
-## Project structure
+## Project Structure
 
 ```text
 asrs-early-warning/
-├── CLAUDE.md                        # Build spec v2 (authoritative)
-├── pyproject.toml                   # uv dependencies
-├── .env                             # ANTHROPIC_API_KEY (never committed)
-├── .gitignore
+├── CLAUDE.md
+├── README.md
+├── pyproject.toml
+├── app.py
 │
 ├── src/
-│   ├── logger.py                    # Shared: console + file logger (all modules use this)
-│   ├── data_loader.py               # ASRS TSV parsing, merge, parquet export
-│   ├── spc.py                       # STL + two-sided CUSUM pipeline
-│   ├── anomaly.py                   # Isolation Forest, 2x2 quadrant, GNSS chart
-│   ├── topics.py                    # BERTopic + topics_over_time + semantic drift
-│   ├── risk_scorer.py               # Layer 3: rule-based precursor risk scorer
-│   ├── forecasting.py               # Layer 3: LightGBM GNSS time-series forecast
-│   └── rag.py                       # Layer 4: ChromaDB + Claude RAG
+│   ├── __init__.py
+│   ├── logger.py
+│   ├── helper.py
+│   ├── plotter.py
+│   ├── data_loader.py
+│   ├── spc.py
+│   ├── anomaly.py
+│   ├── topics.py
+│   ├── risk_scorer.py
+│   └── rag.py
 │
-├── run_layer1.py                    # Layer 1 full pipeline runner
-├── run_layer2.py                    # Layer 2 BERTopic runner
-├── run_layer3.py                    # Layer 3 risk scorer runner
-├── run_layer4.py                    # Layer 4 RAG demo runner
-├── run_gnss_demo.py                 # Standalone: GNSS emergence chart
-├── run_equipment_spc.py             # Standalone: Equipment Critical SPC
-├── run_red_incidents.py             # Standalone: top RED narratives
-├── run_gnss_forecast.py             # Standalone: GNSS 6-month forecast
-│
-├── app.py                           # Streamlit analyst UI for Layer 4 RAG queries
-│
-├── architecture/
-│   ├── production_agent.mmd         # Layer 5: LangGraph agent Mermaid diagram
-│   └── production_agent.png         # Rendered diagram
+├── run_layer1.py
+├── run_layer2.py
+├── run_layer3.py
+├── run_layer4.py
+├── run_gnss_demo.py
+├── run_equipment_spc.py
+├── run_red_incidents.py
 │
 ├── notebooks/
 │   ├── 01_layer0_data_and_eda.ipynb
@@ -445,42 +765,133 @@ asrs-early-warning/
 │   ├── 04_layer3_risk_scorer.ipynb
 │   └── 05_layer4_rag.ipynb
 │
+├── architecture/
+│   ├── production_agent.mmd
+│   └── production_agent.png
+│
 ├── data/
-│   └── raw/                         # ASRS .xls batch files (not committed)
+│   └── raw/
 │
 └── outputs/
-    ├── figures/                     # All generated charts (10 files)
-    └── data/                        # Parquet datasets, CSVs, model files
+    ├── data/
+    │   ├── checkpoints/
+    │   ├── bertopic_model/
+    │   └── chromadb/
+    └── figures/
 ```
 
 ---
 
-## Reproducibility note
+## Reproducibility
 
-All layers except Layer 4 reproduce fully without an API key.
-Layer 4 requires an Anthropic API key in `.env` for answer generation.
-The ChromaDB index persists to `outputs/data/chromadb/` after first build
-and reloads in ~8s on subsequent runs.
+All layers except Layer 4 reproduce without an external API key.
 
-A Streamlit analyst UI is included (`app.py`). Run with:
+Layer 4 requires:
 
-```bash
-uv run streamlit run app.py
+```text
+ANTHROPIC_API_KEY
 ```
 
-## Environment
+The project uses `uv` for dependency management and requires Python 3.11 or later.
 
 ```bash
-uv sync   # installs all dependencies from pyproject.toml
+uv sync
 ```
 
-Requires Python >= 3.11. All dependencies managed via `uv`.
-Requires `ANTHROPIC_API_KEY` in `.env` for Layer 4 RAG demo only.
+The ChromaDB index is persistent. Once Layer 4 has built the index, future runs
+can load the existing index from:
+
+```text
+outputs/data/chromadb/
+```
 
 ---
 
-## Three numbers to cite in the presentation
+## Limitations
 
-- **818** RED quadrant incidents — novel AND anomalous
-- **April 2024** — first CUSUM alarm on GNSS spoofing/jamming
-- **2.5x** — GNSS narrative rate, pre-2023 baseline vs 2024
+This is a proof of concept, not a certified operational safety system.
+
+Known limitations:
+
+- ASRS is voluntary and therefore not a complete census of incidents.
+- Incident reports are self-selected and may reflect reporting culture.
+- SPC detects frequency shifts, not causal mechanisms.
+- Isolation Forest identifies structured novelty, not severity.
+- The Layer 3 scorer uses transparent term matching and is not context-aware.
+- The RAG system depends on retrieval quality and should remain human-reviewed.
+- Layer 4 uses dense retrieval only; production should use hybrid dense and sparse retrieval.
+
+---
+
+## Production Extensions
+
+Recommended production upgrades:
+
+| Area | Upgrade |
+| --- | --- |
+| Retrieval | Replace ChromaDB with Qdrant and BGE-M3 hybrid retrieval |
+| Risk scoring | Train supervised model using ASRS/NTSB accident linkage |
+| Evaluation | Add NDCG@5 retrieval evaluation on analyst-labeled queries |
+| Faithfulness | Add LLM-as-judge faithfulness checks with human calibration |
+| Alerting | Add HITL approval workflow before publication |
+| Monitoring | Track false-positive burden per analyst per week |
+| Data enrichment | Add NTSB, weather, fleet, airport, and traffic-volume context |
+
+---
+
+## Three Numbers to Cite
+
+```text
+272
+RED quadrant incidents: novel and anomalously frequent
+
+April 2024
+First CUSUM alarm on GNSS spoofing / jamming narratives
+
+2.5x
+GNSS narrative rate uplift versus pre-2023 baseline
+```
+
+---
+
+## Technical Choices Defense
+
+### Why not a trained ML risk model?
+
+Because this is a safety-critical proof of concept. A rule-based scorer lets a
+safety analyst see exactly why an incident scored high. Each component maps to
+human-factors language. In production, I would train a supervised model on
+ASRS/NTSB linkage data, but for this case study the transparent scorer is the
+more defensible choice.
+
+### Why ChromaDB?
+
+ChromaDB gives a persistent, local vector store with zero server setup. That is
+appropriate for a demo. In production, I would use Qdrant with hybrid dense and
+sparse retrieval because aviation terminology needs both semantic similarity and
+exact acronym matching.
+
+### Why BERTopic?
+
+BERTopic is appropriate because it discovers semantic clusters from narrative
+text without requiring predefined labels. In this project it independently
+separated GPS/jamming/navigation incidents from 5G/altimeter interference, which
+validates the narrative signal from a different analytical path.
+
+### Why exclude calendar year from Isolation Forest?
+
+Including year would make later years look novel simply because they are later.
+The model should learn operational structure, not time position. Seasonality is
+handled through cyclic month features, while long-term frequency shifts are
+handled separately by SPC.
+
+### What makes the system auditable?
+
+Every layer has traceability:
+
+- SPC: category and alarm month
+- Isolation Forest: structured feature novelty
+- Quadrant: explicit binary signal intersection
+- Risk scorer: matched terms and component scores
+- RAG: ACN-cited source incidents
+- Production agent: human approval before publication
