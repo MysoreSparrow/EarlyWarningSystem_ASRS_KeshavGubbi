@@ -122,12 +122,13 @@ Layer 0 prepares the analysis corpus.
 - Multi-label anomaly categories must be preserved because one incident can span multiple safety categories.
 - 2018-2019 is the cleanest Isolation Forest baseline because 2020 onward is affected by COVID disruption.
 
-### Relevant Files
+### Layer 0 Artifacts
 
-| File | Purpose |
-| --- | --- |
-| `src/data_loader.py` | Loads raw ASRS files and writes merged parquet |
-| `notebooks/01_layer0_data_and_eda.ipynb` | EDA and data-quality explanation |
+| Type | File | Purpose |
+| --- | --- | --- |
+| Python module | [`src/data_loader.py`](src/data_loader.py) | Loads ASRS exports, flattens two-row headers, parses dates, builds `full_narrative` |
+| Notebook | [`notebooks/01_layer0_data_and_eda.ipynb`](notebooks/01_layer0_data_and_eda.ipynb) | Data-source explanation, EDA, completeness checks, and handoff rationale |
+| Data output | `outputs/data/asrs_merged.parquet` | Clean merged corpus, 43,829 x 129 |
 
 ---
 
@@ -226,29 +227,25 @@ Uplift:              2.5x baseline
 First CUSUM alarm:   April 2024
 ```
 
-### Layer 1 Files
+### Layer 1 Artifacts
 
-| File | Purpose |
-| --- | --- |
-| `src/spc.py` | STL + CUSUM computation |
-| `src/anomaly.py` | Isolation Forest and quadrant assignment |
-| `src/helper.py` | Category parsing, matching, and shared helpers |
-| `src/plotter.py` | Plotting functions |
-| `run_layer1.py` | Full Layer 1 runner |
-| `run_gnss_demo.py` | Standalone GNSS emergence chart |
-| `run_equipment_spc.py` | Equipment Critical SPC chart |
-| `run_red_incidents.py` | RED incident export |
-
-### Layer 1 Outputs
-
-| Output | Shape / Count | Description |
+| Type | File | Purpose |
 | --- | --- | --- |
-| `outputs/data/asrs_layer1.parquet` | 43,829 x 204 | Layer 1 enriched corpus |
-| `outputs/data/red_top20_incidents.csv` | 20 rows | Top RED incidents by IF score |
-| `outputs/figures/layer1_spc_cusum.png` | Figure | SPC CUSUM panels |
-| `outputs/figures/2x2_quadrant.png` | Figure | Quadrant chart |
-| `outputs/figures/gnss_emergence.png` | Figure | GNSS narrative CUSUM |
-| `outputs/figures/equipment_critical_spc.png` | Figure | Equipment Critical SPC |
+| Python module | [`src/spc.py`](src/spc.py) | STL decomposition and two-sided CUSUM for anomaly-category frequency shifts |
+| Python module | [`src/anomaly.py`](src/anomaly.py) | Isolation Forest novelty scoring and 2x2 quadrant assignment |
+| Python module | [`src/helper.py`](src/helper.py) | Shared anomaly-category parsing, matching, month normalization, and IF feature helpers |
+| Python module | [`src/plotter.py`](src/plotter.py) | Shared plotting functions used by Layer 1 and later layers |
+| Runner | [`run_layer1.py`](run_layer1.py) | Full Layer 1 pipeline: load, SPC, IF, quadrant, save parquet |
+| Runner | [`run_gnss_demo.py`](run_gnss_demo.py) | Standalone GNSS narrative emergence chart |
+| Runner | [`run_equipment_spc.py`](run_equipment_spc.py) | Standalone Equipment Critical SPC chart |
+| Runner | [`run_red_incidents.py`](run_red_incidents.py) | RED quadrant incident export |
+| Notebook | [`notebooks/02_layer1_anomaly_detection.ipynb`](notebooks/02_layer1_anomaly_detection.ipynb) | Presentation walkthrough for SPC, IF, quadrant logic, and GNSS signal |
+| Data output | `outputs/data/asrs_layer1.parquet` | Layer 1 enriched corpus, 43,829 x 204 |
+| Data output | `outputs/data/red_top20_incidents.csv` | Top RED quadrant incidents by IF score |
+| Figure | [`outputs/figures/layer1_spc_cusum.png`](outputs/figures/layer1_spc_cusum.png) | CUSUM control charts for top anomaly categories |
+| Figure | [`outputs/figures/2x2_quadrant.png`](outputs/figures/2x2_quadrant.png) | 2x2 risk quadrant visualization |
+| Figure | [`outputs/figures/gnss_emergence.png`](outputs/figures/gnss_emergence.png) | GNSS spoofing/jamming monthly signal and CUSUM alarm |
+| Figure | [`outputs/figures/equipment_critical_spc.png`](outputs/figures/equipment_critical_spc.png) | Equipment Critical SPC chart, first alarm May 2022 |
 
 ---
 
@@ -336,24 +333,21 @@ This is an important validation result: the model separated GPS interference and
 The peak in 2024 and sustained elevation in 2025 align with the Layer 1 GNSS
 narrative CUSUM signal.
 
-### Layer 2 Files
+### Layer 2 Artifacts
 
-| File | Purpose |
-| --- | --- |
-| `src/topics.py` | BERTopic, topic lookup, summaries, semantic drift helpers |
-| `run_layer2.py` | Full Layer 2 runner |
-
-### Layer 2 Outputs
-
-| Output | Shape / Count | Description |
+| Type | File | Purpose |
 | --- | --- | --- |
-| `outputs/data/asrs_layer2.parquet` | 43,829 x 206 | Corpus with `topic_id` and `topic_label` |
-| `outputs/data/layer2_topic_summary.csv` | 20 rows | Top topic summary |
-| `outputs/data/bertopic_model/` | Directory | Saved BERTopic model |
-| `outputs/figures/layer2_topic_landscape.png` | Figure | Top topic landscape |
-| `outputs/figures/layer2_gnss_emergence.png` | Figure | GNSS topic emergence |
-| `outputs/figures/layer2_red_topics.png` | Figure | RED quadrant topic distribution |
-| `outputs/figures/layer2_topic_heatmap.png` | Figure | Topic x year heatmap |
+| Python module | [`src/topics.py`](src/topics.py) | BERTopic fitting, topic summaries, GNSS topic identification, semantic drift helpers |
+| Python module | [`src/plotter.py`](src/plotter.py) | Layer 2 topic landscape, GNSS timeline, RED topic, and heatmap plotting |
+| Runner | [`run_layer2.py`](run_layer2.py) | Full Layer 2 pipeline: load Layer 1, fit BERTopic, save topics/model/figures |
+| Notebook | [`notebooks/03_layer2_bertopic.ipynb`](notebooks/03_layer2_bertopic.ipynb) | Presentation walkthrough for BERTopic and semantic validation |
+| Data output | `outputs/data/asrs_layer2.parquet` | Corpus with `topic_id` and `topic_label`, 43,829 x 206 |
+| Data output | `outputs/data/layer2_topic_summary.csv` | Top topic summary with keywords and counts |
+| Model output | `outputs/data/bertopic_model/` | Saved BERTopic model artifacts |
+| Figure | [`outputs/figures/layer2_topic_landscape.png`](outputs/figures/layer2_topic_landscape.png) | Top BERTopic clusters by document count |
+| Figure | [`outputs/figures/layer2_gnss_emergence.png`](outputs/figures/layer2_gnss_emergence.png) | GNSS topic trajectory over time |
+| Figure | [`outputs/figures/layer2_red_topics.png`](outputs/figures/layer2_red_topics.png) | Topic distribution within RED quadrant incidents |
+| Figure | [`outputs/figures/layer2_topic_heatmap.png`](outputs/figures/layer2_topic_heatmap.png) | Topic x year heatmap showing growth trajectories |
 
 ---
 
@@ -444,20 +438,17 @@ Component hits:
   urgency:               2
 ```
 
-### Layer 3 Files
+### Layer 3 Artifacts
 
-| File | Purpose |
-| --- | --- |
-| `src/risk_scorer.py` | Rule-based scoring and high-risk export |
-| `run_layer3.py` | Full Layer 3 runner |
-
-### Layer 3 Outputs
-
-| Output | Shape / Count | Description |
+| Type | File | Purpose |
 | --- | --- | --- |
-| `outputs/data/asrs_layer3.parquet` | 43,829 x 218 | Full corpus with precursor risk columns |
-| `outputs/data/layer3_high_risk_incidents.csv` | 100 rows | Top RED/ORANGE incidents by precursor score |
-| `outputs/figures/precursor_risk_distribution.png` | Figure | Risk score histogram and component breakdown |
+| Python module | [`src/risk_scorer.py`](src/risk_scorer.py) | Rule-based precursor risk scorer and high-risk incident export |
+| Python module | [`src/plotter.py`](src/plotter.py) | Risk score distribution and component breakdown plotting |
+| Runner | [`run_layer3.py`](run_layer3.py) | Full Layer 3 pipeline: score incidents, export CSV, save parquet and figure |
+| Notebook | [`notebooks/04_layer3_risk_scorer.ipynb`](notebooks/04_layer3_risk_scorer.ipynb) | Presentation walkthrough for transparent risk scoring |
+| Data output | `outputs/data/asrs_layer3.parquet` | Full corpus with precursor scores and component counts, 43,829 x 218 |
+| Data output | `outputs/data/layer3_high_risk_incidents.csv` | Top 100 RED/ORANGE incidents by precursor score |
+| Figure | [`outputs/figures/precursor_risk_distribution.png`](outputs/figures/precursor_risk_distribution.png) | Risk score histogram and component breakdown |
 
 ---
 
@@ -540,20 +531,17 @@ Layer 4 successfully:
 - Ran all four Claude demo queries
 - Returned cited answers with ACN-level sources
 
-### Layer 4 Files
+### Layer 4 Artifacts
 
-| File | Purpose |
-| --- | --- |
-| `src/rag.py` | Chroma indexing, retrieval, Claude answer generation |
-| `run_layer4.py` | Builds or loads index and runs demo queries |
-| `app.py` | Streamlit analyst interface |
-
-### Layer 4 Outputs
-
-| Output | Description |
-| --- | --- |
-| `outputs/data/chromadb/` | Persistent ChromaDB index and metadata |
-| Console logs | Demo query answers with cited ACN sources |
+| Type | File | Purpose |
+| --- | --- | --- |
+| Python module | [`src/rag.py`](src/rag.py) | ChromaDB indexing, retrieval, Claude answer generation, citations, demo queries |
+| App | [`app.py`](app.py) | Streamlit analyst UI for RAG querying |
+| Runner | [`run_layer4.py`](run_layer4.py) | Builds/loads ChromaDB index and runs demo queries |
+| Notebook | [`notebooks/05_layer4_rag.ipynb`](notebooks/05_layer4_rag.ipynb) | Presentation walkthrough for RAG retrieval and cited answers |
+| Data input | `outputs/data/asrs_layer3.parquet` | Full Layer 1-3 enriched corpus used for indexing |
+| Vector index | `outputs/data/chromadb/` | Persistent ChromaDB index and metadata |
+| Console output | `run_layer4.py` logs | Demo query answers with ACN-level source citations |
 
 ---
 
