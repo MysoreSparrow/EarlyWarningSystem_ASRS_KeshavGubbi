@@ -22,9 +22,12 @@ The system combines:
 4. Layer 4: cited RAG analyst assistant
 5. Layer 5: production LangGraph agent architecture
 
-The design deliberately favors interpretability, auditability, and defensibility
-over opaque model complexity. Every score, alert, and retrieval result can be
-traced back to an incident, an anomaly category, a text pattern, or an ACN number.
+A working Streamlit prototype demonstrates the Layer 4 analyst assistant with
+ACN-level citations over the indexed RED/ORANGE incidents:
+
+![Streamlit RAG analyst prototype](outputs/figures/streamlit_demo.png)
+
+The design deliberately favors interpretability, auditability, and defensibility over opaque model complexity. Every score, alert, and retrieval result can be traced back to an incident, an anomaly category, a text pattern, or an ACN number.
 
 ---
 
@@ -543,15 +546,19 @@ Layer 4 successfully:
 | Vector index | `outputs/data/chromadb/` | Persistent ChromaDB index and metadata |
 | Console output | `run_layer4.py` logs | Demo query answers with ACN-level source citations |
 
+### Streamlit Prototype
+
+The Streamlit app in `app.py` provides an analyst-facing UI over the same
+ChromaDB index used by `run_layer4.py`. Answers include ACN-level citations
+back to the indexed RED/ORANGE incidents.
+
+![Streamlit RAG analyst prototype](outputs/figures/streamlit_demo.png)
+
 ---
 
 ## Layer 5: Production Agent Architecture
 
-Layer 5 is the production design for turning this prototype into an operational
-early warning workflow.
-
-It uses a LangGraph multi-agent architecture based on the same orchestration
-pattern used in Prognosis.
+Layer 5 is the production design for turning this prototype into an operational early warning workflow. It uses a LangGraph multi-agent architecture based on the same orchestration pattern used in Prognosis.
 
 ### Core Flow
 
@@ -591,8 +598,12 @@ Signal flags
 
 | File | Purpose |
 | --- | --- |
-| production_agent.mmd | Mermaid source diagram |
-| production_agent.png | Rendered architecture diagram |
+| [`architecture/production_agent.mmd`](architecture/production_agent.mmd) | Mermaid source diagram |
+| [`architecture/production_agent.png`](architecture/production_agent.png) | Rendered architecture diagram |
+
+### Overview of the production agent architecture
+
+![Layer 5 production agent architecture](architecture/production_agent.png)
 
 ---
 
@@ -609,7 +620,7 @@ uv sync
 Create a .env file:
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_API_KEY=""
 ```
 
 Layer 4 requires the API key for answer generation. Layers 0-3 do not.
@@ -714,6 +725,8 @@ Copy-Item outputs\data\checkpoints\bertopic_model_2026-06-27 outputs\data\bertop
 | layer2_red_topics.png | 2 | RED quadrant topic distribution |
 | layer2_topic_heatmap.png | 2 | Topic x year heatmap |
 | precursor_risk_distribution.png | 3 | Risk score distribution |
+| streamlit_demo.png | 4 | Streamlit analyst prototype screenshot |
+| production_agent.png | 5 | Production LangGraph agent architecture (rendered) |
 
 ---
 
